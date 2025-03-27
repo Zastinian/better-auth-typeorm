@@ -10,8 +10,9 @@ export default defineConfig(({ watch = false }) => ({
   splitting: false,
   watch,
   esbuildOptions(options) {
-    options.minifyIdentifiers = false;
+    options.minifyIdentifiers = true;
     options.minifySyntax = true;
     options.minifyWhitespace = true;
+    options.keepNames = true;
   },
 }));
