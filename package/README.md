@@ -35,7 +35,7 @@ npm install @hedystia/better-auth-typeorm typeorm
 import { DataSource } from "typeorm";
 import { migrations } from "@hedystia/better-auth-typeorm";
 
-const dataSource = new DataSource({
+export const dataSource = new DataSource({
   type: "mysql",
   host: "localhost",
   port: 3306,
@@ -54,7 +54,7 @@ await dataSource.initialize();
 ```typescript
 import { betterAuth } from "better-auth";
 import { typeormAdapter } from "@hedystia/better-auth-typeorm";
-import dataSource from "./data-source";
+import { dataSource } from "./data-source";
 
 export const auth = betterAuth({
   database: typeormAdapter(dataSource),
