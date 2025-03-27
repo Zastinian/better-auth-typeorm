@@ -9,5 +9,9 @@ export default defineConfig(({ watch = false }) => ({
   format: "esm",
   splitting: false,
   watch,
-  minify: !watch,
+  esbuildOptions(options) {
+    options.minifyIdentifiers = false;
+    options.minifySyntax = true;
+    options.minifyWhitespace = true;
+  },
 }));
