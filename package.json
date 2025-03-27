@@ -1,0 +1,10 @@
+{
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4"
+  },
+  "scripts": {
+    "build": "bun run --filter '*' build",
+    "dev": "bun run --filter '*' dev"
+  },
+  "workspaces": ["package"]
+}

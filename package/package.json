@@ -1,0 +1,50 @@
+{
+  "name": "@hedystia/better-auth-typeorm",
+  "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zastinian/better-auth-typeorm.git"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2"
+  },
+  "peerDependencies": {
+    "better-auth": "^1.2.0",
+    "typeorm": "^0.3.21"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "bugs": {
+    "url": "https://github.com/Zastinian/better-auth-typeorm/issues"
+  },
+  "files": ["dist"],
+  "homepage": "https://github.com/Zastinian/better-auth-typeorm",
+  "keywords": ["better-auth", "typeorm", "plugin", "auth", "better", "adapter", "typescript"],
+  "license": "MIT",
+  "peerDependenciesMeta": {
+    "better-auth": {
+      "optional": false
+    },
+    "typeorm": {
+      "optional": false
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch"
+  },
+  "type": "module",
+  "types": "./dist/index.d.ts"
+}
