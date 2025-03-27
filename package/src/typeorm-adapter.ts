@@ -7,6 +7,8 @@ import {
   MoreThan,
   MoreThanOrEqual,
   Like,
+  Not,
+  In,
 } from "typeorm";
 import { BetterAuthError, generateId } from "better-auth";
 import { getAuthTables, type FieldAttribute } from "better-auth/db";
@@ -49,6 +51,33 @@ export const typeormAdapter =
         return f.fieldName || field;
       }
 
+      function convertOperatorToTypeORM(operator: string, value: unknown) {
+        switch (operator) {
+          case "eq":
+            return value;
+          case "ne":
+            return Not(value);
+          case "gt":
+            return MoreThan(value);
+          case "lt":
+            return LessThan(value);
+          case "gte":
+            return MoreThanOrEqual(value);
+          case "lte":
+            return LessThanOrEqual(value);
+          case "in":
+            return In(value as unknown[]);
+          case "contains":
+            return Like(`%${value}%`);
+          case "starts_with":
+            return Like(`${value}%`);
+          case "ends_with":
+            return Like(`%${value}`);
+          default:
+            return value;
+        }
+      }
+
       function convertWhereToFindOptions(
         model: string,
         where?: Where[],
@@ -57,38 +86,13 @@ export const typeormAdapter =
 
         const findOptions: FindOptionsWhere<ObjectLiteral> = {};
 
-        const equalClauses = where.filter((w) => !w.operator || w.operator === "eq");
-        for (let i = 0; i < equalClauses.length; i++) {
-          const w = equalClauses[i];
+        for (const w of where) {
           const field = getField(model, w.field);
-          findOptions[field] = w.value;
-        }
 
-        for (let i = 0; i < where.length; i++) {
-          const w = where[i];
-          if (w.operator && w.operator !== "eq") {
-            const field = getField(model, w.field);
-
-            switch (w.operator) {
-              case "gt":
-                findOptions[field] = MoreThan(w.value);
-                break;
-              case "lt":
-                findOptions[field] = LessThan(w.value);
-                break;
-              case "gte":
-                findOptions[field] = MoreThanOrEqual(w.value);
-                break;
-              case "lte":
-                findOptions[field] = LessThanOrEqual(w.value);
-                break;
-              case "starts_with":
-                findOptions[field] = Like(`${w.value}%`);
-                break;
-              case "ends_with":
-                findOptions[field] = Like(`%${w.value}`);
-                break;
-            }
+          if (!w.operator || w.operator === "eq") {
+            findOptions[field] = w.value;
+          } else {
+            findOptions[field] = convertOperatorToTypeORM(w.operator, w.value);
           }
         }
 
