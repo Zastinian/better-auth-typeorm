@@ -54,7 +54,7 @@ await dataSource.initialize();
 ```typescript
 import { betterAuth } from "better-auth";
 import { typeormAdapter } from "@hedystia/better-auth-typeorm";
-import dataSource from "./data-source";
+import { dataSource } from "./data-source";
 
 export const auth = betterAuth({
   database: typeormAdapter(dataSource),
