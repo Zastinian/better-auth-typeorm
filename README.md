@@ -23,9 +23,6 @@
 
 ## 🚀 Quick Start
 
-> [!IMPORTANT]
-> Don't forget that you must already have the entities or the better-auth migration.
-
 1. Install the package:
 
 ```bash
@@ -36,6 +33,7 @@ npm install @hedystia/better-auth-typeorm typeorm
 
 ```typescript
 import { DataSource } from "typeorm";
+import { migrations } from "@hedystia/better-auth-typeorm";
 
 const dataSource = new DataSource({
   type: "mysql",
@@ -44,8 +42,8 @@ const dataSource = new DataSource({
   username: "your_username",
   password: "your_password",
   database: "your_database",
-  entities: [User, Account, Verification, Session],
-  synchronize: true,
+  migrations: [...migrations],
+  migrationsRun: true,
 });
 
 await dataSource.initialize();
