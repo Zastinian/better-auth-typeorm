@@ -12,7 +12,7 @@ import { BetterAuthError, generateId } from "better-auth";
 import { getAuthTables, type FieldAttribute } from "better-auth/db";
 import type { Adapter, BetterAuthOptions, Where } from "better-auth/types";
 
-export function withApplyDefault(
+function withApplyDefault(
   value: unknown,
   field: FieldAttribute,
   action: "create" | "update",
