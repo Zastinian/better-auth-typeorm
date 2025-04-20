@@ -33,7 +33,7 @@ npm install @hedystia/better-auth-typeorm typeorm
 
 ```typescript
 import { DataSource } from "typeorm";
-import { migrations } from "@hedystia/better-auth-typeorm";
+import { entities, migrations } from "@hedystia/better-auth-typeorm";
 
 export const dataSource = new DataSource({
   type: "mysql",
@@ -42,6 +42,7 @@ export const dataSource = new DataSource({
   username: "your_username",
   password: "your_password",
   database: "your_database",
+  entities: [...entities],
   migrations: [...migrations],
   migrationsRun: true,
 });
