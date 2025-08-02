@@ -1,12 +1,13 @@
 {
   "name": "@hedystia/better-auth-typeorm",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Zastinian/better-auth-typeorm.git"
   },
   "main": "./dist/index.js",
   "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "devDependencies": {
     "@swc/core": "^1.11.21",
     "@types/bun": "^1.2.10",
@@ -24,7 +25,18 @@
   "exports": {
     ".": {
       "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
       "types": "./dist/index.d.ts"
+    },
+    "./entities": {
+      "import": "./dist/entities/index.js",
+      "require": "./dist/entities/index.cjs",
+      "types": "./dist/entities/index.d.ts"
+    },
+    "./migrations": {
+      "import": "./dist/migrations/index.js",
+      "require": "./dist/migrations/index.cjs",
+      "types": "./dist/migrations/index.d.ts"
     },
     "./package.json": "./package.json"
   },
@@ -50,6 +62,5 @@
     "build": "tsup",
     "dev": "tsup --watch"
   },
-  "type": "module",
-  "types": "./dist/index.d.ts"
+  "type": "module"
 }
