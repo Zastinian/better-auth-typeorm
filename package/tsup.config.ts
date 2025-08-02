@@ -5,10 +5,13 @@ export default defineConfig(({ watch = false }) => ({
   dts: true,
   entry: {
     index: "src/index.ts",
+    "entities/index": "src/entities/index.ts",
+    "migrations/index": "src/migrations/index.ts",
   },
-  format: "esm",
+  format: ["esm", "cjs"],
   splitting: false,
   watch,
+  outDir: "dist",
   esbuildOptions(options) {
     options.minifyIdentifiers = true;
     options.minifySyntax = true;
