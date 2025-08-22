@@ -37,352 +37,352 @@ function withApplyDefault(
 
 export const typeormAdapter =
   (dataSource: DataSource) =>
-    (options: BetterAuthOptions): Adapter => {
-      const schema = getAuthTables(options);
+  (options: BetterAuthOptions): Adapter => {
+    const schema = getAuthTables(options);
 
-      const createTransform = () => {
-        function getField(model: string, field: string): string {
-          if (field === "id") {
-            return field;
+    const createTransform = () => {
+      function getField(model: string, field: string): string {
+        if (field === "id") {
+          return field;
+        }
+        const modelSchema = schema[model];
+        if (!modelSchema) {
+          throw new Error(`Model ${model} not found in schema`);
+        }
+        const f = modelSchema.fields[field];
+        return f.fieldName || field;
+      }
+
+      function convertOperatorToTypeORM(operator: string, value: unknown) {
+        switch (operator) {
+          case "eq":
+            return value;
+          case "ne":
+            return Not(value);
+          case "gt":
+            return MoreThan(value);
+          case "lt":
+            return LessThan(value);
+          case "gte":
+            return MoreThanOrEqual(value);
+          case "lte":
+            return LessThanOrEqual(value);
+          case "in":
+            return In(value as unknown[]);
+          case "contains":
+            return Like(`%${value}%`);
+          case "starts_with":
+            return Like(`${value}%`);
+          case "ends_with":
+            return Like(`%${value}`);
+          default:
+            return value;
+        }
+      }
+
+      function convertWhereToFindOptions(
+        model: string,
+        where?: Where[],
+      ): FindOptionsWhere<ObjectLiteral> {
+        if (!where || where.length === 0) return {};
+
+        const findOptions: FindOptionsWhere<ObjectLiteral> = {};
+
+        for (const w of where) {
+          const field = getField(model, w.field);
+
+          if (!w.operator || w.operator === "eq") {
+            findOptions[field] = w.value;
+          } else {
+            findOptions[field] = convertOperatorToTypeORM(w.operator, w.value);
           }
-          const modelSchema = schema[model];
-          if (!modelSchema) {
-            throw new Error(`Model ${model} not found in schema`);
-          }
-          const f = modelSchema.fields[field];
-          return f.fieldName || field;
         }
 
-        function convertOperatorToTypeORM(operator: string, value: unknown) {
-          switch (operator) {
-            case "eq":
-              return value;
-            case "ne":
-              return Not(value);
-            case "gt":
-              return MoreThan(value);
-            case "lt":
-              return LessThan(value);
-            case "gte":
-              return MoreThanOrEqual(value);
-            case "lte":
-              return LessThanOrEqual(value);
-            case "in":
-              return In(value as unknown[]);
-            case "contains":
-              return Like(`%${value}%`);
-            case "starts_with":
-              return Like(`${value}%`);
-            case "ends_with":
-              return Like(`%${value}`);
-            default:
-              return value;
-          }
-        }
+        return findOptions;
+      }
 
-        function convertWhereToFindOptions(
+      function getModelName(model: string): string {
+        const modelSchema = schema[model];
+        if (!modelSchema) {
+          throw new Error(`Model ${model} not found in schema`);
+        }
+        return modelSchema.modelName;
+      }
+
+      const useDatabaseGeneratedId = options?.advanced?.generateId === false;
+
+      return {
+        transformInput(
+          data: Record<string, unknown>,
           model: string,
-          where?: Where[],
-        ): FindOptionsWhere<ObjectLiteral> {
-          if (!where || where.length === 0) return {};
-
-          const findOptions: FindOptionsWhere<ObjectLiteral> = {};
-
-          for (const w of where) {
-            const field = getField(model, w.field);
-
-            if (!w.operator || w.operator === "eq") {
-              findOptions[field] = w.value;
-            } else {
-              findOptions[field] = convertOperatorToTypeORM(w.operator, w.value);
-            }
-          }
-
-          return findOptions;
-        }
-
-        function getModelName(model: string): string {
-          const modelSchema = schema[model];
-          if (!modelSchema) {
-            throw new Error(`Model ${model} not found in schema`);
-          }
-          return modelSchema.modelName;
-        }
-
-        const useDatabaseGeneratedId = options?.advanced?.generateId === false;
-
-        return {
-          transformInput(
-            data: Record<string, unknown>,
-            model: string,
-            action: "create" | "update",
-          ): Record<string, unknown> {
-            const transformedData: Record<string, unknown> =
-              useDatabaseGeneratedId || action === "update"
-                ? {}
-                : {
+          action: "create" | "update",
+        ): Record<string, unknown> {
+          const transformedData: Record<string, unknown> =
+            useDatabaseGeneratedId || action === "update"
+              ? {}
+              : {
                   id: data.id,
                 };
 
-            const modelSchema = schema[model];
-            if (!modelSchema) {
-              throw new Error(`Model ${model} not found in schema`);
+          const modelSchema = schema[model];
+          if (!modelSchema) {
+            throw new Error(`Model ${model} not found in schema`);
+          }
+
+          const fields = modelSchema.fields;
+          for (const field in fields) {
+            const value = data[field];
+            if (value === undefined && (!fields[field].defaultValue || action === "update")) {
+              continue;
             }
-
-            const fields = modelSchema.fields;
-            for (const field in fields) {
-              const value = data[field];
-              if (value === undefined && (!fields[field].defaultValue || action === "update")) {
-                continue;
-              }
-              transformedData[fields[field].fieldName || field] = withApplyDefault(
-                value,
-                fields[field],
-                action,
-              );
-            }
-            return transformedData;
-          },
-
-          transformOutput(
-            data: ObjectLiteral | null,
-            model: string,
-            select: string[] = [],
-          ): Record<string, unknown> | null {
-            if (!data) return null;
-
-            const transformedData: Record<string, unknown> =
-              data.id || data._id
-                ? select.length === 0 || select.includes("id")
-                  ? { id: data.id || data._id }
-                  : {}
-                : {};
-
-            const modelSchema = schema[model];
-            if (!modelSchema) {
-              throw new Error(`Model ${model} not found in schema`);
-            }
-
-            const tableSchema = modelSchema.fields;
-            for (const key in tableSchema) {
-              if (select.length && !select.includes(key)) {
-                continue;
-              }
-              const field = tableSchema[key];
-              if (field) {
-                transformedData[key] = data[field.fieldName || key];
-              }
-            }
-            return transformedData;
-          },
-
-          convertWhereToFindOptions,
-          getModelName,
-          getField,
-        };
-      };
-
-      const { transformInput, transformOutput, convertWhereToFindOptions, getModelName } =
-        createTransform();
-
-      return {
-        id: "typeorm",
-        async create<T extends Record<string, unknown>, R = T>(data: {
-          model: string;
-          data: T;
-          select?: string[];
-        }): Promise<R> {
-          const { model, data: values, select } = data;
-          const transformed = transformInput(values, model, "create");
-
-          const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
-
-          try {
-            const result = await repository.save(transformed);
-            return transformOutput(result, model, select) as R;
-          } catch (error: unknown) {
-            throw new BetterAuthError(
-              `Failed to create ${model}: ${error instanceof Error ? error.message : String(error)}`,
+            transformedData[fields[field].fieldName || field] = withApplyDefault(
+              value,
+              fields[field],
+              action,
             );
           }
+          return transformedData;
         },
 
-        async update<T>(data: {
-          model: string;
-          where: Where[];
-          update: Record<string, unknown>;
-          select?: string[];
-        }): Promise<T | null> {
-          const { model, where, update, select = [] } = data;
-          const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
+        transformOutput(
+          data: ObjectLiteral | null,
+          model: string,
+          select: string[] = [],
+        ): Record<string, unknown> | null {
+          if (!data) return null;
 
-          try {
-            const findOptions = convertWhereToFindOptions(model, where);
-            const transformed = transformInput(update, model, "update");
+          const transformedData: Record<string, unknown> =
+            data.id || data._id
+              ? select.length === 0 || select.includes("id")
+                ? { id: data.id || data._id }
+                : {}
+              : {};
 
-            if (where.length === 1) {
-              const updatedRecord = await repository.findOne({
+          const modelSchema = schema[model];
+          if (!modelSchema) {
+            throw new Error(`Model ${model} not found in schema`);
+          }
+
+          const tableSchema = modelSchema.fields;
+          for (const key in tableSchema) {
+            if (select.length && !select.includes(key)) {
+              continue;
+            }
+            const field = tableSchema[key];
+            if (field) {
+              transformedData[key] = data[field.fieldName || key];
+            }
+          }
+          return transformedData;
+        },
+
+        convertWhereToFindOptions,
+        getModelName,
+        getField,
+      };
+    };
+
+    const { transformInput, transformOutput, convertWhereToFindOptions, getModelName } =
+      createTransform();
+
+    return {
+      id: "typeorm",
+      async create<T extends Record<string, unknown>, R = T>(data: {
+        model: string;
+        data: T;
+        select?: string[];
+      }): Promise<R> {
+        const { model, data: values, select } = data;
+        const transformed = transformInput(values, model, "create");
+
+        const repositoryName = getModelName(model);
+        const repository = dataSource.getRepository(repositoryName);
+
+        try {
+          const result = await repository.save(transformed);
+          return transformOutput(result, model, select) as R;
+        } catch (error: unknown) {
+          throw new BetterAuthError(
+            `Failed to create ${model}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      },
+
+      async update<T>(data: {
+        model: string;
+        where: Where[];
+        update: Record<string, unknown>;
+        select?: string[];
+      }): Promise<T | null> {
+        const { model, where, update, select = [] } = data;
+        const repositoryName = getModelName(model);
+        const repository = dataSource.getRepository(repositoryName);
+
+        try {
+          const findOptions = convertWhereToFindOptions(model, where);
+          const transformed = transformInput(update, model, "update");
+
+          if (where.length === 1) {
+            const updatedRecord = await repository.findOne({
+              where: findOptions,
+            });
+
+            if (updatedRecord) {
+              await repository.update(findOptions, transformed);
+              const result = await repository.findOne({
                 where: findOptions,
               });
-
-              if (updatedRecord) {
-                await repository.update(findOptions, transformed);
-                const result = await repository.findOne({
-                  where: findOptions,
-                });
-                return transformOutput(result, model, select) as T;
-              }
+              return transformOutput(result, model, select) as T;
             }
-
-            await repository.update(findOptions, transformed);
-            return null;
-          } catch (error: unknown) {
-            throw new BetterAuthError(
-              `Failed to update ${model}: ${error instanceof Error ? error.message : String(error)}`,
-            );
           }
-        },
 
-        async delete(data: { model: string; where: Where[] }): Promise<void> {
-          const { model, where } = data;
-          const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
+          await repository.update(findOptions, transformed);
+          return null;
+        } catch (error: unknown) {
+          throw new BetterAuthError(
+            `Failed to update ${model}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      },
 
-          try {
-            const findOptions = convertWhereToFindOptions(model, where);
-            await repository.delete(findOptions);
-          } catch (error: unknown) {
-            throw new BetterAuthError(
-              `Failed to delete ${model}: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        },
+      async delete(data: { model: string; where: Where[] }): Promise<void> {
+        const { model, where } = data;
+        const repositoryName = getModelName(model);
+        const repository = dataSource.getRepository(repositoryName);
 
-        async findOne<T>(data: {
-          model: string;
-          where: Where[];
-          select?: string[];
-        }): Promise<T | null> {
-          const { model, where, select } = data;
-          const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
+        try {
+          const findOptions = convertWhereToFindOptions(model, where);
+          await repository.delete(findOptions);
+        } catch (error: unknown) {
+          throw new BetterAuthError(
+            `Failed to delete ${model}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      },
 
-          try {
-            const findOptions = convertWhereToFindOptions(model, where);
-            const result = await repository.findOne({
-              where: findOptions,
-              select: select,
-            });
-            return transformOutput(result, model, select) as T;
-          } catch (error: unknown) {
-            throw new BetterAuthError(
-              `Failed to find ${model}: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        },
+      async findOne<T>(data: {
+        model: string;
+        where: Where[];
+        select?: string[];
+      }): Promise<T | null> {
+        const { model, where, select } = data;
+        const repositoryName = getModelName(model);
+        const repository = dataSource.getRepository(repositoryName);
 
-        async findMany<T>(data: {
-          model: string;
-          where?: Where[];
-          limit?: number;
-          offset?: number;
-          sortBy?: { field: string; direction: "asc" | "desc" };
-        }): Promise<T[]> {
-          const { model, where, limit, offset, sortBy } = data;
-          const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
+        try {
+          const findOptions = convertWhereToFindOptions(model, where);
+          const result = await repository.findOne({
+            where: findOptions,
+            select: select,
+          });
+          return transformOutput(result, model, select) as T;
+        } catch (error: unknown) {
+          throw new BetterAuthError(
+            `Failed to find ${model}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      },
 
-          try {
-            const findOptions = convertWhereToFindOptions(model, where);
+      async findMany<T>(data: {
+        model: string;
+        where?: Where[];
+        limit?: number;
+        offset?: number;
+        sortBy?: { field: string; direction: "asc" | "desc" };
+      }): Promise<T[]> {
+        const { model, where, limit, offset, sortBy } = data;
+        const repositoryName = getModelName(model);
+        const repository = dataSource.getRepository(repositoryName);
 
-            const result = await repository.find({
-              where: findOptions,
-              take: limit || 100,
-              skip: offset || 0,
-              order: sortBy?.field
-                ? {
+        try {
+          const findOptions = convertWhereToFindOptions(model, where);
+
+          const result = await repository.find({
+            where: findOptions,
+            take: limit || 100,
+            skip: offset || 0,
+            order: sortBy?.field
+              ? {
                   [sortBy.field]: sortBy.direction === "desc" ? "DESC" : "ASC",
                 }
-                : undefined,
-            });
+              : undefined,
+          });
 
-            return result.map((r) => transformOutput(r, model)) as T[];
-          } catch (error: unknown) {
-            throw new BetterAuthError(
-              `Failed to find many ${model}: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        },
+          return result.map((r) => transformOutput(r, model)) as T[];
+        } catch (error: unknown) {
+          throw new BetterAuthError(
+            `Failed to find many ${model}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      },
 
-        async count(data) {
-          const { model, where } = data;
-          const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
+      async count(data) {
+        const { model, where } = data;
+        const repositoryName = getModelName(model);
+        const repository = dataSource.getRepository(repositoryName);
 
-          try {
-            const findOptions = convertWhereToFindOptions(model, where);
-            const result = await repository.count({ where: findOptions });
-            return result;
-          } catch (error: unknown) {
-            throw new BetterAuthError(
-              `Failed to count ${model}: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        },
+        try {
+          const findOptions = convertWhereToFindOptions(model, where);
+          const result = await repository.count({ where: findOptions });
+          return result;
+        } catch (error: unknown) {
+          throw new BetterAuthError(
+            `Failed to count ${model}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      },
 
-        async updateMany(data) {
-          const { model, where, update } = data;
-          const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
+      async updateMany(data) {
+        const { model, where, update } = data;
+        const repositoryName = getModelName(model);
+        const repository = dataSource.getRepository(repositoryName);
 
-          try {
-            const findOptions = convertWhereToFindOptions(model, where);
-            const transformed = transformInput(update, model, "update");
+        try {
+          const findOptions = convertWhereToFindOptions(model, where);
+          const transformed = transformInput(update, model, "update");
 
-            const result = await repository.update(findOptions, transformed);
-            return result.affected || 0;
-          } catch (error: unknown) {
-            throw new BetterAuthError(
-              `Failed to update many ${model}: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        },
+          const result = await repository.update(findOptions, transformed);
+          return result.affected || 0;
+        } catch (error: unknown) {
+          throw new BetterAuthError(
+            `Failed to update many ${model}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      },
 
-        async deleteMany(data) {
-          const { model, where } = data;
-          const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
+      async deleteMany(data) {
+        const { model, where } = data;
+        const repositoryName = getModelName(model);
+        const repository = dataSource.getRepository(repositoryName);
 
-          try {
-            const findOptions = convertWhereToFindOptions(model, where);
-            const result = await repository.delete(findOptions);
-            return result.affected || 0;
-          } catch (error: unknown) {
-            throw new BetterAuthError(
-              `Failed to delete many ${model}: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        },
+        try {
+          const findOptions = convertWhereToFindOptions(model, where);
+          const result = await repository.delete(findOptions);
+          return result.affected || 0;
+        } catch (error: unknown) {
+          throw new BetterAuthError(
+            `Failed to delete many ${model}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      },
 
-        async createSchema(_, file) {
-          const typeormPath = path.join(process.cwd(), "typeorm");
-          const entitiesPath = path.join(typeormPath, "entities");
-          const migrationsPath = path.join(typeormPath, "migrations");
+      async createSchema(_, file) {
+        const typeormPath = path.join(process.cwd(), "typeorm");
+        const entitiesPath = path.join(typeormPath, "entities");
+        const migrationsPath = path.join(typeormPath, "migrations");
 
-          if (!fs.existsSync(typeormPath)) {
-            fs.mkdirSync(typeormPath, { recursive: true });
-          }
-          if (!fs.existsSync(entitiesPath)) {
-            fs.mkdirSync(entitiesPath, { recursive: true });
-          }
-          if (!fs.existsSync(migrationsPath)) {
-            fs.mkdirSync(migrationsPath, { recursive: true });
-          }
+        if (!fs.existsSync(typeormPath)) {
+          fs.mkdirSync(typeormPath, { recursive: true });
+        }
+        if (!fs.existsSync(entitiesPath)) {
+          fs.mkdirSync(entitiesPath, { recursive: true });
+        }
+        if (!fs.existsSync(migrationsPath)) {
+          fs.mkdirSync(migrationsPath, { recursive: true });
+        }
 
-          const entityContents = {
-            User: `import { Column, Entity } from "typeorm";
+        const entityContents = {
+          User: `import { Column, Entity } from "typeorm";
 
 @Entity("user")
 export class User {
@@ -408,7 +408,7 @@ export class User {
   updatedAt: Date;
 }
 `,
-            Account: `import { Column, Entity } from "typeorm";
+          Account: `import { Column, Entity } from "typeorm";
 
 @Entity("account")
 export class Account {
@@ -452,7 +452,7 @@ export class Account {
   updatedAt: Date;
 }
 `,
-            Session: `import { Column, Entity } from "typeorm";
+          Session: `import { Column, Entity } from "typeorm";
 
 @Entity("session")
 export class Session {
@@ -481,7 +481,7 @@ export class Session {
   userId: string;
 }
 `,
-            Verification: `import { Column, Entity } from "typeorm";
+          Verification: `import { Column, Entity } from "typeorm";
 
 @Entity("verification")
 export class Verification {
@@ -504,18 +504,18 @@ export class Verification {
   updatedAt: Date;
 }
 `,
-          };
+        };
 
-          const entities = ["User", "Account", "Session", "Verification"];
-          for (const entity of entities) {
-            const entityPath = path.join(entitiesPath, `${entity}.ts`);
-            if (!fs.existsSync(entityPath)) {
-              fs.writeFileSync(entityPath, entityContents[entity as keyof typeof entityContents]);
-            }
+        const entities = ["User", "Account", "Session", "Verification"];
+        for (const entity of entities) {
+          const entityPath = path.join(entitiesPath, `${entity}.ts`);
+          if (!fs.existsSync(entityPath)) {
+            fs.writeFileSync(entityPath, entityContents[entity as keyof typeof entityContents]);
           }
+        }
 
-          const migrationContents = {
-            User1743030454220: `import { type MigrationInterface, type QueryRunner, Table, TableIndex } from "typeorm";
+        const migrationContents = {
+          User1743030454220: `import { type MigrationInterface, type QueryRunner, Table, TableIndex } from "typeorm";
 
 export class User1743030454220 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -554,7 +554,7 @@ export class User1743030454220 implements MigrationInterface {
   }
 }
 `,
-            Account1743030465550: `import { type MigrationInterface, type QueryRunner, Table, TableForeignKey } from "typeorm";
+          Account1743030465550: `import { type MigrationInterface, type QueryRunner, Table, TableForeignKey } from "typeorm";
 
 export class Account1743030465550 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -601,7 +601,7 @@ export class Account1743030465550 implements MigrationInterface {
   }
 }
 `,
-            Verification1743030486793: `import { type MigrationInterface, type QueryRunner, Table } from "typeorm";
+          Verification1743030486793: `import { type MigrationInterface, type QueryRunner, Table } from "typeorm";
 
 export class Verification1743030486793 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -630,7 +630,7 @@ export class Verification1743030486793 implements MigrationInterface {
   }
 }
 `,
-            Session1743030537958: `import {
+          Session1743030537958: `import {
   type MigrationInterface,
   type QueryRunner,
   Table,
@@ -685,31 +685,31 @@ export class Session1743030537958 implements MigrationInterface {
   }
 }
 `,
-          };
+        };
 
-          const migrations = [
-            "User1743030454220",
-            "Account1743030465550",
-            "Verification1743030486793",
-            "Session1743030537958",
-          ];
+        const migrations = [
+          "User1743030454220",
+          "Account1743030465550",
+          "Verification1743030486793",
+          "Session1743030537958",
+        ];
 
-          for (const migration of migrations) {
-            const migrationPath = path.join(migrationsPath, `${migration}.ts`);
-            if (!fs.existsSync(migrationPath)) {
-              fs.writeFileSync(
-                migrationPath,
-                migrationContents[migration as keyof typeof migrationContents],
-              );
-            }
+        for (const migration of migrations) {
+          const migrationPath = path.join(migrationsPath, `${migration}.ts`);
+          if (!fs.existsSync(migrationPath)) {
+            fs.writeFileSync(
+              migrationPath,
+              migrationContents[migration as keyof typeof migrationContents],
+            );
           }
+        }
 
-          return {
-            code: `// TypeORM schema files created successfully
+        return {
+          code: `// TypeORM schema files created successfully
 // Entities: ${entities.join(", ")}
 // Migrations: ${migrations.join(", ")}`,
-            path: file || path.join(typeormPath, "schema-info.txt"),
-          };
-        },
-      };
+          path: file || path.join(typeormPath, "schema-info.txt"),
+        };
+      },
     };
+  };
