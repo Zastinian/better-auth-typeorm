@@ -10,7 +10,7 @@ import {
   Not,
   In,
 } from "typeorm";
-import { BetterAuthError, generateId } from "better-auth";
+import { BetterAuthError } from "better-auth";
 import { getAuthTables, type FieldAttribute } from "better-auth/db";
 import type { Adapter, BetterAuthOptions, Where } from "better-auth/types";
 import * as fs from "fs";
