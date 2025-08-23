@@ -121,9 +121,7 @@ export const typeormAdapter =
             useDatabaseGeneratedId || action === "update"
               ? {}
               : {
-                  id: options.advanced?.generateId
-                    ? options.advanced.generateId({ model })
-                    : data.id || generateId(),
+                  id: data.id,
                 };
 
           const modelSchema = schema[model];
