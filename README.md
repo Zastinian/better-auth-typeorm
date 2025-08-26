@@ -29,11 +29,23 @@
 npm install @hedystia/better-auth-typeorm typeorm
 ```
 
-2. Create your TypeORM DataSource configuration:
+2.  **Generate TypeORM Entities and Migrations**
+
+Before you can use the adapter, you need to generate the necessary entities and migrations for your database. You can do this using the Better Auth CLI:
+
+```bash
+bunx @better-auth/cli generate
+# or
+npx @better-auth/cli generate
+```
+
+This command will create the `typeorm/entities` and `typeorm/migrations` directories in your project.
+
+3.  Create your TypeORM DataSource configuration:
 
 ```typescript
 import { DataSource } from "typeorm";
-import { entities, migrations } from "@hedystia/better-auth-typeorm";
+import path from "path";
 
 export const dataSource = new DataSource({
   type: "mysql",
@@ -42,23 +54,25 @@ export const dataSource = new DataSource({
   username: "your_username",
   password: "your_password",
   database: "your_database",
-  entities: [...entities],
-  migrations: [...migrations],
+  entities: [path.join(__dirname, "typeorm/entities/**/*.ts")],
+  migrations: [path.join(__dirname, "typeorm/migrations/**/*.ts")],
   migrationsRun: true,
 });
 
 await dataSource.initialize();
 ```
 
-3. Set up your Better Auth configuration:
+4. Set up your Better Auth configuration:
 
 ```typescript
 import { betterAuth } from "better-auth";
 import { typeormAdapter } from "@hedystia/better-auth-typeorm";
+import { organization, twoFactor } from "better-auth/plugins";
 import { dataSource } from "./data-source";
 
 export const auth = betterAuth({
   database: typeormAdapter(dataSource),
+  plugins: [organization(), twoFactor()],
 });
 ```
 
