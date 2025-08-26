@@ -35,6 +35,219 @@ function withApplyDefault(
   return value;
 }
 
+function mapFieldTypeToTypeORM(
+  fieldType: string | string[],
+  _: FieldAttribute,
+): { type: string; length?: string } {
+  const typeStr = Array.isArray(fieldType) ? fieldType[0] || "string" : fieldType;
+
+  switch (typeStr) {
+    case "string":
+      return { type: "text" };
+    case "number":
+      return { type: "integer" };
+    case "boolean":
+      return { type: "integer" };
+    case "date":
+      return { type: "date" };
+    default:
+      return { type: "text" };
+  }
+}
+
+function generateEntity(
+  modelName: string,
+  modelSchema: {
+    modelName: string;
+    fields: Record<string, FieldAttribute>;
+    disableMigrations?: boolean;
+    order?: number;
+  },
+): string {
+  const className = modelName.charAt(0).toUpperCase() + modelName.slice(1);
+  const tableName = modelSchema.modelName;
+
+  const imports = "import { Column, Entity, PrimaryColumn } from 'typeorm';\n\n";
+  let entityCode = `@Entity('${tableName}')\nexport class ${className} {\n`;
+
+  entityCode += "  @PrimaryColumn('text')\n";
+  entityCode += "  id: string;\n\n";
+
+  for (const [fieldName, field] of Object.entries(modelSchema.fields)) {
+    const fieldAttr = field as FieldAttribute;
+    const dbField = fieldAttr.fieldName || fieldName;
+    const typeInfo = mapFieldTypeToTypeORM(fieldAttr.type, fieldAttr);
+
+    const columnOptions: string[] = [];
+
+    columnOptions.push(`name: '${dbField}'`);
+
+    if (!fieldAttr.required) {
+      columnOptions.push("nullable: true");
+    } else {
+      columnOptions.push("nullable: false");
+    }
+
+    if (fieldAttr.unique || dbField === "email" || dbField === "token") {
+      columnOptions.push("unique: true");
+    }
+
+    const columnOptionsStr = columnOptions.length > 0 ? `, { ${columnOptions.join(", ")} }` : "";
+
+    entityCode += `  @Column('${typeInfo.type}'${columnOptionsStr})\n`;
+    entityCode += `  ${fieldName}: ${fieldAttr.type === "date" ? "Date" : fieldAttr.type === "boolean" ? "boolean" : "string"};\n\n`;
+  }
+
+  entityCode += "}";
+
+  return imports + entityCode;
+}
+
+function generateMigration(
+  modelName: string,
+  modelSchema: {
+    modelName: string;
+    fields: Record<string, FieldAttribute>;
+    disableMigrations?: boolean;
+    order?: number;
+  },
+  timestamp: number,
+  action: "create" | "alter",
+  changes?: {
+    addColumns?: { name: string; field: FieldAttribute }[];
+    dropColumns?: string[];
+    modifyColumns?: { name: string; field: FieldAttribute }[];
+  },
+): string {
+  const className = `${action.charAt(0).toUpperCase() + action.slice(1)}${modelName.charAt(0).toUpperCase() + modelName.slice(1)}${timestamp}`;
+  const tableName = modelSchema.modelName;
+
+  let migrationCode =
+    "import { type MigrationInterface, type QueryRunner, Table, TableIndex, TableColumn } from 'typeorm';\n\n";
+  migrationCode += `export class ${className} implements MigrationInterface {\n`;
+  migrationCode += "  public async up(queryRunner: QueryRunner): Promise<void> {\n";
+
+  if (action === "create") {
+    migrationCode += "    await queryRunner.createTable(\n";
+    migrationCode += "      new Table({\n";
+    migrationCode += `        name: '${tableName}',\n`;
+    migrationCode += "        columns: [\n";
+
+    const columns: string[] = [];
+    const indexes: string[] = [];
+
+    columns.push(`          {
+            name: 'id',
+            type: 'text',
+            isPrimary: true,
+          }`);
+
+    for (const [fieldName, field] of Object.entries(modelSchema.fields)) {
+      const fieldAttr = field as FieldAttribute;
+      const dbField = fieldAttr.fieldName || fieldName;
+      const typeInfo = mapFieldTypeToTypeORM(fieldAttr.type, fieldAttr);
+
+      let columnDef = "          {\n";
+      columnDef += `            name: '${dbField}',\n`;
+      columnDef += `            type: '${typeInfo.type}',\n`;
+
+      if (typeInfo.length) {
+        columnDef += `            length: '${typeInfo.length}',\n`;
+      }
+
+      if (fieldName === "id" || dbField === "id") {
+        continue;
+      }
+
+      if (!fieldAttr.required && fieldName !== "id") {
+        columnDef += "            isNullable: true,\n";
+      } else if (fieldAttr.required && fieldName !== "id") {
+        columnDef += "            isNullable: false,\n";
+      }
+
+      columnDef += "          }";
+      columns.push(columnDef);
+
+      if (fieldAttr.unique || dbField === "email") {
+        indexes.push(`    await queryRunner.createIndex(
+      '${tableName}',
+      new TableIndex({
+        name: 'IDX_${tableName}_${dbField}',
+        columnNames: ['${dbField}'],
+        isUnique: true,
+      }),
+    );`);
+      }
+    }
+
+    migrationCode += `${columns.join(",\n")}\n`;
+    migrationCode += "        ],\n";
+    migrationCode += "      }),\n";
+    migrationCode += "    );\n\n";
+
+    if (indexes.length > 0) {
+      migrationCode += `${indexes.join("\n\n")}\n`;
+    }
+  } else if (action === "alter" && changes) {
+    if (changes.addColumns) {
+      for (const { name, field } of changes.addColumns) {
+        const typeInfo = mapFieldTypeToTypeORM(field.type, field);
+        migrationCode += `    await queryRunner.addColumn('${tableName}', new TableColumn({\n`;
+        migrationCode += `      name: '${field.fieldName || name}',\n`;
+        migrationCode += `      type: '${typeInfo.type}',\n`;
+        migrationCode += `      isNullable: ${!field.required},\n`;
+        if (field.unique) {
+          migrationCode += "      isUnique: true,\n";
+        }
+        migrationCode += "    }));\n\n";
+      }
+    }
+
+    if (changes.dropColumns) {
+      for (const columnName of changes.dropColumns) {
+        migrationCode += `    await queryRunner.dropColumn('${tableName}', '${columnName}');\n\n`;
+      }
+    }
+
+    if (changes.modifyColumns) {
+      for (const { name, field } of changes.modifyColumns) {
+        const typeInfo = mapFieldTypeToTypeORM(field.type, field);
+        migrationCode += `    await queryRunner.changeColumn('${tableName}', '${name}', new TableColumn({\n`;
+        migrationCode += `      name: '${field.fieldName || name}',\n`;
+        migrationCode += `      type: '${typeInfo.type}',\n`;
+        migrationCode += `      isNullable: ${!field.required},\n`;
+        if (field.unique) {
+          migrationCode += "      isUnique: true,\n";
+        }
+        migrationCode += "    }));\n\n";
+      }
+    }
+  }
+
+  migrationCode += "  }\n\n";
+  migrationCode += "  public async down(queryRunner: QueryRunner): Promise<void> {\n";
+
+  if (action === "create") {
+    migrationCode += `    await queryRunner.dropTable('${tableName}');\n`;
+  } else if (action === "alter" && changes) {
+    if (changes.addColumns) {
+      for (const { name, field } of changes.addColumns) {
+        migrationCode += `    await queryRunner.dropColumn('${tableName}', '${field.fieldName || name}');\n`;
+      }
+    }
+    if (changes.dropColumns) {
+      for (const columnName of changes.dropColumns) {
+        migrationCode += `    await queryRunner.addColumn('${tableName}', new TableColumn({ name: '${columnName}', type: 'text', isNullable: true }));\n`;
+      }
+    }
+  }
+
+  migrationCode += "  }\n";
+  migrationCode += "}";
+
+  return migrationCode;
+}
+
 export const typeormAdapter =
   (dataSource: DataSource) =>
   (options: BetterAuthOptions): Adapter => {
@@ -367,349 +580,151 @@ export const typeormAdapter =
       },
 
       async createSchema(_, file) {
-        const typeormPath = path.join(process.cwd(), "typeorm");
-        const entitiesPath = path.join(typeormPath, "entities");
-        const migrationsPath = path.join(typeormPath, "migrations");
+        try {
+          const metadata = dataSource.entityMetadatas;
+          const existingTableNames = metadata.map((meta) => meta.tableName);
+          const existingTables = new Map();
 
-        if (!fs.existsSync(typeormPath)) {
-          fs.mkdirSync(typeormPath, { recursive: true });
-        }
-        if (!fs.existsSync(entitiesPath)) {
-          fs.mkdirSync(entitiesPath, { recursive: true });
-        }
-        if (!fs.existsSync(migrationsPath)) {
-          fs.mkdirSync(migrationsPath, { recursive: true });
-        }
-
-        const entityContents = {
-          User: `import { Column, Entity } from "typeorm";
-
-@Entity("user")
-export class User {
-  @Column("varchar", { primary: true, name: "id", length: 36 })
-  id: string;
-
-  @Column("text", { name: "name", nullable: false })
-  name: string;
-
-  @Column("varchar", { name: "email", length: 255, nullable: false })
-  email: string;
-
-  @Column("boolean", { name: "emailVerified", default: false })
-  emailVerified: boolean;
-
-  @Column("text", { name: "image", nullable: true })
-  image: string;
-
-  @Column("datetime", { name: "createdAt", nullable: false, default: () => "CURRENT_TIMESTAMP" })
-  createdAt: Date;
-
-  @Column("datetime", { name: "updatedAt", nullable: false, default: () => "CURRENT_TIMESTAMP" })
-  updatedAt: Date;
-}
-`,
-          Account: `import { Column, Entity } from "typeorm";
-
-@Entity("account")
-export class Account {
-  @Column("varchar", { primary: true, name: "id", length: 36 })
-  id: string;
-
-  @Column("text", { name: "accountId", nullable: false })
-  accountId: string;
-
-  @Column("text", { name: "providerId", nullable: false })
-  providerId: string;
-
-  @Column("varchar", { name: "userId", length: 36, nullable: false })
-  userId: string;
-
-  @Column("text", { name: "accessToken", nullable: true })
-  accessToken: string;
-
-  @Column("text", { name: "refreshToken", nullable: true })
-  refreshToken: string;
-
-  @Column("text", { name: "idToken", nullable: true })
-  idToken: string;
-
-  @Column("datetime", { name: "accessTokenExpiresAt", nullable: true })
-  accessTokenExpiresAt: Date;
-
-  @Column("datetime", { name: "refreshTokenExpiresAt", nullable: true })
-  refreshTokenExpiresAt: Date;
-
-  @Column("text", { name: "scope", nullable: true })
-  scope: string;
-
-  @Column("text", { name: "password", nullable: true })
-  password: string;
-
-  @Column("datetime", { name: "createdAt", nullable: false, default: () => "CURRENT_TIMESTAMP" })
-  createdAt: Date;
-
-  @Column("datetime", { name: "updatedAt", nullable: false, default: () => "CURRENT_TIMESTAMP" })
-  updatedAt: Date;
-}
-`,
-          Session: `import { Column, Entity } from "typeorm";
-
-@Entity("session")
-export class Session {
-  @Column("varchar", { primary: true, name: "id", length: 36 })
-  id: string;
-
-  @Column("datetime", { name: "expiresAt", nullable: false })
-  expiresAt: Date;
-
-  @Column("text", { name: "token", nullable: false })
-  token: string;
-
-  @Column("datetime", { name: "createdAt", nullable: false, default: () => "CURRENT_TIMESTAMP" })
-  createdAt: Date;
-
-  @Column("datetime", { name: "updatedAt", nullable: false, default: () => "CURRENT_TIMESTAMP" })
-  updatedAt: Date;
-
-  @Column("text", { name: "ipAddress", nullable: true })
-  ipAddress: string;
-
-  @Column("text", { name: "userAgent", nullable: true })
-  userAgent: string;
-
-  @Column("varchar", { name: "userId", length: 36, nullable: false })
-  userId: string;
-}
-`,
-          Verification: `import { Column, Entity } from "typeorm";
-
-@Entity("verification")
-export class Verification {
-  @Column("varchar", { primary: true, name: "id", length: 36 })
-  id: string;
-
-  @Column("text", { name: "identifier", nullable: false })
-  identifier: string;
-
-  @Column("text", { name: "value", nullable: false })
-  value: string;
-
-  @Column("datetime", { name: "expiresAt", nullable: false })
-  expiresAt: Date;
-
-  @Column("datetime", { name: "createdAt", nullable: true })
-  createdAt: Date;
-
-  @Column("datetime", { name: "updatedAt", nullable: true })
-  updatedAt: Date;
-}
-`,
-        };
-
-        const entities = ["User", "Account", "Session", "Verification"];
-        for (const entity of entities) {
-          const entityPath = path.join(entitiesPath, `${entity}.ts`);
-          if (!fs.existsSync(entityPath)) {
-            fs.writeFileSync(entityPath, entityContents[entity as keyof typeof entityContents]);
+          for (const meta of metadata) {
+            const columns = meta.columns.map((col) => ({
+              name: col.databaseName,
+              type: col.type,
+              isNullable: col.isNullable,
+              isUnique: col.entityMetadata.uniques.some((u) =>
+                u.columns.some((c) => c.propertyName === col.propertyName),
+              ),
+            }));
+            existingTables.set(meta.tableName, columns);
           }
-        }
 
-        const migrationContents = {
-          User1743030454220: `import { type MigrationInterface, type QueryRunner, Table, TableIndex } from "typeorm";
+          const expectedTables = Object.keys(schema);
+          const missingTables = expectedTables.filter(
+            (model) => !existingTableNames.includes(schema[model].modelName),
+          );
 
-export class User1743030454220 implements MigrationInterface {
-  public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.createTable(
-      new Table({
-        name: "user",
-        columns: [
-          {
-            name: "id",
-            type: "varchar",
-            length: "36",
-            isPrimary: true,
-          },
-          { name: "name", type: "text", isNullable: false },
-          { name: "email", type: "varchar", length: "255", isNullable: false },
-          { name: "emailVerified", type: "boolean", isNullable: false },
-          { name: "image", type: "text", isNullable: true },
-          { name: "createdAt", type: "datetime", isNullable: false },
-          { name: "updatedAt", type: "datetime", isNullable: false },
-        ],
-      }),
-    );
+          const tablesToUpdate = expectedTables.filter((model) =>
+            existingTableNames.includes(schema[model].modelName),
+          );
 
-    await queryRunner.createIndex(
-      "user",
-      new TableIndex({
-        name: "IDX_user_email",
-        columnNames: ["email"],
-        isUnique: true,
-      }),
-    );
-  }
+          const timestamp = Date.now();
+          const typeormDir = path.resolve("./typeorm");
+          const migrationsDir = path.resolve("./typeorm/migrations");
+          const entitiesDir = path.resolve("./typeorm/entities");
 
-  public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.dropTable("user");
-  }
-}
-`,
-          Account1743030465550: `import { type MigrationInterface, type QueryRunner, Table, TableForeignKey } from "typeorm";
+          if (!fs.existsSync(typeormDir)) {
+            fs.mkdirSync(typeormDir, { recursive: true });
+          }
+          if (!fs.existsSync(migrationsDir)) {
+            fs.mkdirSync(migrationsDir, { recursive: true });
+          }
+          if (!fs.existsSync(entitiesDir)) {
+            fs.mkdirSync(entitiesDir, { recursive: true });
+          }
 
-export class Account1743030465550 implements MigrationInterface {
-  public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.createTable(
-      new Table({
-        name: "account",
-        columns: [
-          {
-            name: "id",
-            type: "varchar",
-            length: "36",
-            isPrimary: true,
-          },
-          { name: "accountId", type: "text", isNullable: false },
-          { name: "providerId", type: "text", isNullable: false },
-          { name: "userId", type: "varchar", length: "36", isNullable: false },
-          { name: "accessToken", type: "text", isNullable: true },
-          { name: "refreshToken", type: "text", isNullable: true },
-          { name: "idToken", type: "text", isNullable: true },
-          { name: "accessTokenExpiresAt", type: "datetime", isNullable: true },
-          { name: "refreshTokenExpiresAt", type: "datetime", isNullable: true },
-          { name: "scope", type: "text", isNullable: true },
-          { name: "password", type: "text", isNullable: true },
-          { name: "createdAt", type: "datetime", isNullable: false },
-          { name: "updatedAt", type: "datetime", isNullable: false },
-        ],
-      }),
-    );
+          let changelogContent = `# TypeORM Schema Changes - ${new Date().toISOString()}\n\n`;
 
-    await queryRunner.createForeignKey(
-      "account",
-      new TableForeignKey({
-        name: "FK_account_userId_user_id",
-        columnNames: ["userId"],
-        referencedColumnNames: ["id"],
-        referencedTableName: "user",
-        onDelete: "CASCADE",
-      }),
-    );
-  }
+          if (missingTables.length === 0 && tablesToUpdate.length === 0) {
+            return {
+              code: "No pending migrations found.",
+              path: file ?? "typeorm/changelog.txt",
+            };
+          }
 
-  public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.dropTable("account");
-  }
-}
-`,
-          Verification1743030486793: `import { type MigrationInterface, type QueryRunner, Table } from "typeorm";
+          for (const modelName of missingTables) {
+            const modelSchema = schema[modelName];
 
-export class Verification1743030486793 implements MigrationInterface {
-  public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.createTable(
-      new Table({
-        name: "verification",
-        columns: [
-          {
-            name: "id",
-            type: "varchar",
-            length: "36",
-            isPrimary: true,
-          },
-          { name: "identifier", type: "text", isNullable: false },
-          { name: "value", type: "text", isNullable: false },
-          { name: "expiresAt", type: "datetime", isNullable: false },
-          { name: "createdAt", type: "datetime", isNullable: true },
-          { name: "updatedAt", type: "datetime", isNullable: true },
-        ],
-      }),
-    );
-  }
+            const migrationCode = generateMigration(modelName, modelSchema, timestamp, "create");
+            const migrationPath = path.join(migrationsDir, `${timestamp}-create-${modelName}.ts`);
+            fs.writeFileSync(migrationPath, migrationCode);
 
-  public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.dropTable("verification");
-  }
-}
-`,
-          Session1743030537958: `import {
-  type MigrationInterface,
-  type QueryRunner,
-  Table,
-  TableForeignKey,
-  TableIndex,
-} from "typeorm";
-
-export class Session1743030537958 implements MigrationInterface {
-  public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.createTable(
-      new Table({
-        name: "session",
-        columns: [
-          {
-            name: "id",
-            type: "varchar",
-            length: "36",
-            isPrimary: true,
-          },
-          { name: "expiresAt", type: "datetime", isNullable: false },
-          { name: "token", type: "varchar", length: "255" },
-          { name: "createdAt", type: "datetime", isNullable: false },
-          { name: "updatedAt", type: "datetime", isNullable: false },
-          { name: "ipAddress", type: "text", isNullable: true },
-          { name: "userAgent", type: "text", isNullable: true },
-          { name: "userId", type: "varchar", length: "36", isNullable: false },
-        ],
-      }),
-    );
-    await queryRunner.createIndex(
-      "session",
-      new TableIndex({
-        name: "IDX_session_token",
-        columnNames: ["token"],
-        isUnique: true,
-      }),
-    );
-    await queryRunner.createForeignKey(
-      "session",
-      new TableForeignKey({
-        name: "FK_session_userId_user_id",
-        columnNames: ["userId"],
-        referencedColumnNames: ["id"],
-        referencedTableName: "user",
-        onDelete: "CASCADE",
-      }),
-    );
-  }
-
-  public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.dropTable("session");
-  }
-}
-`,
-        };
-
-        const migrations = [
-          "User1743030454220",
-          "Account1743030465550",
-          "Verification1743030486793",
-          "Session1743030537958",
-        ];
-
-        for (const migration of migrations) {
-          const migrationPath = path.join(migrationsPath, `${migration}.ts`);
-          if (!fs.existsSync(migrationPath)) {
-            fs.writeFileSync(
-              migrationPath,
-              migrationContents[migration as keyof typeof migrationContents],
+            const entityCode = generateEntity(modelName, modelSchema);
+            const entityPath = path.join(
+              entitiesDir,
+              `${modelName.charAt(0).toUpperCase() + modelName.slice(1)}.ts`,
             );
-          }
-        }
+            fs.writeFileSync(entityPath, entityCode);
 
-        return {
-          code: `// TypeORM schema files created successfully
-// Entities: ${entities.join(", ")}
-// Migrations: ${migrations.join(", ")}`,
-          path: file || path.join(typeormPath, "schema-info.txt"),
-        };
+            changelogContent += `- CREATE Migration: migrations/${timestamp}-create-${modelName}.ts\n`;
+            changelogContent += `- Entity: entities/${modelName.charAt(0).toUpperCase() + modelName.slice(1)}.ts\n\n`;
+          }
+
+          for (const modelName of tablesToUpdate) {
+            const modelSchema = schema[modelName];
+            const tableName = modelSchema.modelName;
+            const existingColumns = existingTables.get(tableName) || [];
+
+            const expectedFields = modelSchema.fields;
+            const existingColumnNames = existingColumns.map(
+              (col: {
+                name: string;
+              }) => col.name,
+            );
+
+            const addColumns = [];
+            const dropColumns = [];
+            const modifyColumns: { name: string; field: FieldAttribute }[] = [];
+
+            for (const [fieldName, field] of Object.entries(expectedFields)) {
+              const dbField = field.fieldName || fieldName;
+              if (!existingColumnNames.includes(dbField)) {
+                addColumns.push({ name: fieldName, field });
+              }
+            }
+
+            for (const existingCol of existingColumns) {
+              const fieldExists = Object.entries(expectedFields).some(
+                ([fieldName, field]) => (field.fieldName || fieldName) === existingCol.name,
+              );
+              if (!fieldExists && existingCol.name !== "id") {
+                dropColumns.push(existingCol.name);
+              }
+            }
+
+            if (addColumns.length > 0 || dropColumns.length > 0 || modifyColumns.length > 0) {
+              const changes = { addColumns, dropColumns, modifyColumns };
+              const migrationCode = generateMigration(
+                modelName,
+                modelSchema,
+                timestamp,
+                "alter",
+                changes,
+              );
+              const migrationPath = path.join(migrationsDir, `${timestamp}-alter-${modelName}.ts`);
+              fs.writeFileSync(migrationPath, migrationCode);
+
+              const entityCode = generateEntity(modelName, modelSchema);
+              const entityPath = path.join(
+                entitiesDir,
+                `${modelName.charAt(0).toUpperCase() + modelName.slice(1)}.ts`,
+              );
+              fs.writeFileSync(entityPath, entityCode);
+
+              changelogContent += `- ALTER Migration: migrations/${timestamp}-alter-${modelName}.ts\n`;
+              changelogContent += `- Updated Entity: entities/${modelName.charAt(0).toUpperCase() + modelName.slice(1)}.ts\n`;
+
+              if (addColumns.length > 0) {
+                changelogContent += `  - Added columns: ${addColumns.map((col) => col.field.fieldName || col.name).join(", ")}\n`;
+              }
+              if (dropColumns.length > 0) {
+                changelogContent += `  - Removed columns: ${dropColumns.join(", ")}\n`;
+              }
+              changelogContent += "\n";
+            }
+          }
+
+          if (missingTables.length > 0) {
+            changelogContent += `\nTables to create: ${missingTables.map((t) => schema[t].modelName).join(", ")}\n`;
+          }
+
+          return {
+            code: changelogContent,
+            path: file ?? "typeorm/changelog.txt",
+          };
+        } catch (error) {
+          throw new BetterAuthError(
+            `Failed to create schema: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       },
     };
   };
