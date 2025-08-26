@@ -6,5 +6,5 @@
     "build": "bun run --filter '*' build",
     "dev": "bun run --filter '*' dev"
   },
-  "workspaces": ["package"]
+  "workspaces": ["package", "test"]
 }
