@@ -28,16 +28,6 @@
       "require": "./dist/index.cjs",
       "types": "./dist/index.d.ts"
     },
-    "./entities": {
-      "import": "./dist/entities/index.js",
-      "require": "./dist/entities/index.cjs",
-      "types": "./dist/entities/index.d.ts"
-    },
-    "./migrations": {
-      "import": "./dist/migrations/index.js",
-      "require": "./dist/migrations/index.cjs",
-      "types": "./dist/migrations/index.d.ts"
-    },
     "./package.json": "./package.json"
   },
   "bugs": {
