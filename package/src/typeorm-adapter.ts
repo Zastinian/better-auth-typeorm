@@ -47,7 +47,7 @@ function mapFieldTypeToTypeORM(
     case "number":
       return { type: "integer" };
     case "boolean":
-      return { type: "integer" };
+      return { type: "boolean" };
     case "date":
       return { type: "date" };
     default:
@@ -412,7 +412,8 @@ export const typeormAdapter =
         const repository = dataSource.getRepository(repositoryName);
 
         try {
-          const result = await repository.save(transformed);
+          const entity = repository.create(transformed);
+          const result = await repository.save(entity);
           return transformOutput(result, model, select) as R;
         } catch (error: unknown) {
           throw new BetterAuthError(
