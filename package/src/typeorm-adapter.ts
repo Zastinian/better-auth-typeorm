@@ -331,7 +331,7 @@ export const typeormAdapter =
         return modelSchema.modelName;
       }
 
-      const generateId = options?.advanced?.generateId ?? false;
+      const generateId = options?.advanced?.database?.generateId ?? false;
 
       return {
         transformInput(
