@@ -11,10 +11,19 @@ import {
   In,
 } from "typeorm";
 import { BetterAuthError } from "better-auth";
-import { getAuthTables, type FieldAttribute } from "better-auth/db";
-import type { Adapter, BetterAuthOptions, Where } from "better-auth/types";
+import { getAuthTables } from "better-auth/db";
+import type { BetterAuthOptions, Where } from "better-auth/types";
+import type { DBAdapter } from "better-auth/adapters";
 import * as fs from "fs";
 import * as path from "path";
+
+type FieldAttribute = {
+  type: string | string[];
+  required?: boolean;
+  unique?: boolean;
+  fieldName?: string;
+  defaultValue?: unknown | (() => unknown);
+};
 
 function withApplyDefault(
   value: unknown,
@@ -250,7 +259,7 @@ function generateMigration(
 
 export const typeormAdapter =
   (dataSource: DataSource) =>
-  (options: BetterAuthOptions): Adapter => {
+  (options: BetterAuthOptions): DBAdapter => {
     const schema = getAuthTables(options);
 
     const createTransform = () => {
@@ -322,7 +331,7 @@ export const typeormAdapter =
         return modelSchema.modelName;
       }
 
-      const useDatabaseGeneratedId = options?.advanced?.generateId === false;
+      const generateId = options?.advanced?.generateId ?? false;
 
       return {
         transformInput(
@@ -330,12 +339,16 @@ export const typeormAdapter =
           model: string,
           action: "create" | "update",
         ): Record<string, unknown> {
-          const transformedData: Record<string, unknown> =
-            useDatabaseGeneratedId || action === "update"
-              ? {}
-              : {
-                  id: data.id,
-                };
+          const transformedData: Record<string, unknown> = {};
+
+          if (action === "create") {
+            if (generateId && typeof generateId === "function") {
+              const generatedId = generateId({ model, size: 21 });
+              transformedData.id = data.id || (generatedId !== false ? generatedId : undefined);
+            } else if (data.id) {
+              transformedData.id = data.id;
+            }
+          }
 
           const modelSchema = schema[model];
           if (!modelSchema) {
@@ -580,6 +593,132 @@ export const typeormAdapter =
         }
       },
 
+      async transaction<T>(fn: (tx: DBAdapter) => Promise<T>): Promise<T> {
+        const queryRunner = dataSource.createQueryRunner();
+        await queryRunner.connect();
+        await queryRunner.startTransaction();
+
+        try {
+          const transactionalAdapter: DBAdapter = {
+            ...this,
+            async create<T extends Record<string, unknown>, R = T>(data: {
+              model: string;
+              data: T;
+              select?: string[];
+            }): Promise<R> {
+              const { model, data: values, select } = data;
+              const transformed = transformInput(values, model, "create");
+              const repositoryName = getModelName(model);
+              const repository = queryRunner.manager.getRepository(repositoryName);
+
+              const entity = repository.create(transformed);
+              const result = await repository.save(entity);
+              return transformOutput(result, model, select) as R;
+            },
+            async update<T>(data: {
+              model: string;
+              where: Where[];
+              update: Record<string, unknown>;
+              select?: string[];
+            }): Promise<T | null> {
+              const { model, where, update, select = [] } = data;
+              const repositoryName = getModelName(model);
+              const repository = queryRunner.manager.getRepository(repositoryName);
+
+              const findOptions = convertWhereToFindOptions(model, where);
+              const transformed = transformInput(update, model, "update");
+
+              if (where.length === 1) {
+                const updatedRecord = await repository.findOne({ where: findOptions });
+                if (updatedRecord) {
+                  await repository.update(findOptions, transformed);
+                  const result = await repository.findOne({ where: findOptions });
+                  return transformOutput(result, model, select) as T;
+                }
+              }
+
+              await repository.update(findOptions, transformed);
+              return null;
+            },
+            async delete(data: { model: string; where: Where[] }): Promise<void> {
+              const { model, where } = data;
+              const repositoryName = getModelName(model);
+              const repository = queryRunner.manager.getRepository(repositoryName);
+              const findOptions = convertWhereToFindOptions(model, where);
+              await repository.delete(findOptions);
+            },
+            async findOne<T>(data: {
+              model: string;
+              where: Where[];
+              select?: string[];
+            }): Promise<T | null> {
+              const { model, where, select } = data;
+              const repositoryName = getModelName(model);
+              const repository = queryRunner.manager.getRepository(repositoryName);
+              const findOptions = convertWhereToFindOptions(model, where);
+              const result = await repository.findOne({ where: findOptions, select });
+              return transformOutput(result, model, select) as T;
+            },
+            async findMany<T>(data: {
+              model: string;
+              where?: Where[];
+              limit?: number;
+              offset?: number;
+              sortBy?: { field: string; direction: "asc" | "desc" };
+            }): Promise<T[]> {
+              const { model, where, limit, offset, sortBy } = data;
+              const repositoryName = getModelName(model);
+              const repository = queryRunner.manager.getRepository(repositoryName);
+              const findOptions = convertWhereToFindOptions(model, where);
+
+              const result = await repository.find({
+                where: findOptions,
+                take: limit || 100,
+                skip: offset || 0,
+                order: sortBy?.field
+                  ? { [sortBy.field]: sortBy.direction === "desc" ? "DESC" : "ASC" }
+                  : undefined,
+              });
+
+              return result.map((r) => transformOutput(r, model)) as T[];
+            },
+            async count(data) {
+              const { model, where } = data;
+              const repositoryName = getModelName(model);
+              const repository = queryRunner.manager.getRepository(repositoryName);
+              const findOptions = convertWhereToFindOptions(model, where);
+              return await repository.count({ where: findOptions });
+            },
+            async updateMany(data) {
+              const { model, where, update } = data;
+              const repositoryName = getModelName(model);
+              const repository = queryRunner.manager.getRepository(repositoryName);
+              const findOptions = convertWhereToFindOptions(model, where);
+              const transformed = transformInput(update, model, "update");
+              const result = await repository.update(findOptions, transformed);
+              return result.affected || 0;
+            },
+            async deleteMany(data) {
+              const { model, where } = data;
+              const repositoryName = getModelName(model);
+              const repository = queryRunner.manager.getRepository(repositoryName);
+              const findOptions = convertWhereToFindOptions(model, where);
+              const result = await repository.delete(findOptions);
+              return result.affected || 0;
+            },
+          };
+
+          const result = await fn(transactionalAdapter);
+          await queryRunner.commitTransaction();
+          return result;
+        } catch (error) {
+          await queryRunner.rollbackTransaction();
+          throw error;
+        } finally {
+          await queryRunner.release();
+        }
+      },
+
       async createSchema(_, file) {
         try {
           const metadata = dataSource.entityMetadatas;
@@ -655,11 +794,7 @@ export const typeormAdapter =
             const existingColumns = existingTables.get(tableName) || [];
 
             const expectedFields = modelSchema.fields;
-            const existingColumnNames = existingColumns.map(
-              (col: {
-                name: string;
-              }) => col.name,
-            );
+            const existingColumnNames = existingColumns.map((col: { name: string }) => col.name);
 
             const addColumns = [];
             const dropColumns = [];
