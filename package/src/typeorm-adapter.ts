@@ -10,11 +10,7 @@ import {
   Not,
   In,
 } from "typeorm";
-import {
-  BetterAuthError,
-  generateId as betterAuthGenerateId,
-  type GenerateIdFn,
-} from "better-auth";
+import { BetterAuthError, generateId as betterAuthGenerateId } from "better-auth";
 import { getAuthTables } from "better-auth/db";
 import type { BetterAuthOptions, Where } from "better-auth/types";
 import type { DBAdapter } from "better-auth/adapters";
@@ -28,12 +24,6 @@ type FieldAttribute = {
   fieldName?: string;
   defaultValue?: unknown | (() => unknown);
 };
-
-type SimpleGenerateIdFn = (size?: number) => string;
-
-function isGenerateIdFn(fn: GenerateIdFn | SimpleGenerateIdFn): fn is GenerateIdFn {
-  return fn.length > 0 || fn.toString().includes("model");
-}
 
 function withApplyDefault(
   value: unknown,
@@ -343,7 +333,7 @@ export const typeormAdapter =
         return modelSchema.modelName;
       }
 
-      const generateId = options?.advanced?.database?.generateId ?? betterAuthGenerateId;
+      const generateId = options?.advanced?.database?.generateId ?? false;
 
       return {
         transformInput(
@@ -355,11 +345,11 @@ export const typeormAdapter =
 
           if (action === "create") {
             if (generateId && typeof generateId === "function") {
-              transformedData.id = isGenerateIdFn(generateId)
-                ? generateId({ model, size: 21 })
-                : generateId(21);
-            } else if (data.id) {
+              transformedData.id = generateId({ model, size: 21 });
+            } else if (data.id && data.id !== "") {
               transformedData.id = data.id;
+            } else {
+              transformedData.id = betterAuthGenerateId(21);
             }
           }
 
