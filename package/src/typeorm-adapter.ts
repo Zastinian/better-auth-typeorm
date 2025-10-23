@@ -158,6 +158,10 @@ function generateMigration(
       const dbField = fieldAttr.fieldName || fieldName;
       const typeInfo = mapFieldTypeToTypeORM(fieldAttr.type, fieldAttr);
 
+      if (fieldName === "id" || dbField === "id") {
+        continue;
+      }
+
       let columnDef = "          {\n";
       columnDef += `            name: '${dbField}',\n`;
       columnDef += `            type: '${typeInfo.type}',\n`;
@@ -166,14 +170,8 @@ function generateMigration(
         columnDef += `            length: '${typeInfo.length}',\n`;
       }
 
-      if (fieldName === "id" || dbField === "id") {
-        continue;
-      }
-
-      if (!fieldAttr.required && fieldName !== "id") {
+      if (!fieldAttr.required) {
         columnDef += "            isNullable: true,\n";
-      } else if (fieldAttr.required && fieldName !== "id") {
-        columnDef += "            isNullable: false,\n";
       }
 
       columnDef += "          }";
@@ -200,7 +198,7 @@ function generateMigration(
       migrationCode += `${indexes.join("\n\n")}\n`;
     }
   } else if (action === "alter" && changes) {
-    if (changes.addColumns) {
+    if (changes.addColumns && changes.addColumns.length > 0) {
       for (const { name, field } of changes.addColumns) {
         const typeInfo = mapFieldTypeToTypeORM(field.type, field);
         migrationCode += `    await queryRunner.addColumn('${tableName}', new TableColumn({\n`;
@@ -214,13 +212,13 @@ function generateMigration(
       }
     }
 
-    if (changes.dropColumns) {
+    if (changes.dropColumns && changes.dropColumns.length > 0) {
       for (const columnName of changes.dropColumns) {
         migrationCode += `    await queryRunner.dropColumn('${tableName}', '${columnName}');\n\n`;
       }
     }
 
-    if (changes.modifyColumns) {
+    if (changes.modifyColumns && changes.modifyColumns.length > 0) {
       for (const { name, field } of changes.modifyColumns) {
         const typeInfo = mapFieldTypeToTypeORM(field.type, field);
         migrationCode += `    await queryRunner.changeColumn('${tableName}', '${name}', new TableColumn({\n`;
@@ -241,12 +239,12 @@ function generateMigration(
   if (action === "create") {
     migrationCode += `    await queryRunner.dropTable('${tableName}');\n`;
   } else if (action === "alter" && changes) {
-    if (changes.addColumns) {
+    if (changes.addColumns && changes.addColumns.length > 0) {
       for (const { name, field } of changes.addColumns) {
         migrationCode += `    await queryRunner.dropColumn('${tableName}', '${field.fieldName || name}');\n`;
       }
     }
-    if (changes.dropColumns) {
+    if (changes.dropColumns && changes.dropColumns.length > 0) {
       for (const columnName of changes.dropColumns) {
         migrationCode += `    await queryRunner.addColumn('${tableName}', new TableColumn({ name: '${columnName}', type: 'text', isNullable: true }));\n`;
       }
@@ -724,31 +722,6 @@ export const typeormAdapter =
 
       async createSchema(_, file) {
         try {
-          const metadata = dataSource.entityMetadatas;
-          const existingTableNames = metadata.map((meta) => meta.tableName);
-          const existingTables = new Map();
-
-          for (const meta of metadata) {
-            const columns = meta.columns.map((col) => ({
-              name: col.databaseName,
-              type: col.type,
-              isNullable: col.isNullable,
-              isUnique: col.entityMetadata.uniques.some((u) =>
-                u.columns.some((c) => c.propertyName === col.propertyName),
-              ),
-            }));
-            existingTables.set(meta.tableName, columns);
-          }
-
-          const expectedTables = Object.keys(schema);
-          const missingTables = expectedTables.filter(
-            (model) => !existingTableNames.includes(schema[model].modelName),
-          );
-
-          const tablesToUpdate = expectedTables.filter((model) =>
-            existingTableNames.includes(schema[model].modelName),
-          );
-
           const timestamp = Date.now();
           const typeormDir = path.resolve("./typeorm");
           const migrationsDir = path.resolve("./typeorm/migrations");
@@ -764,95 +737,109 @@ export const typeormAdapter =
             fs.mkdirSync(entitiesDir, { recursive: true });
           }
 
+          const queryRunner = dataSource.createQueryRunner();
+          await queryRunner.connect();
+
           let changelogContent = `# TypeORM Schema Changes - ${new Date().toISOString()}\n\n`;
+          let hasChanges = false;
 
-          if (missingTables.length === 0 && tablesToUpdate.length === 0) {
-            return {
-              code: "No pending migrations found.",
-              path: file ?? "typeorm/changelog.txt",
-            };
-          }
+          const expectedTables = Object.keys(schema);
 
-          for (const modelName of missingTables) {
+          for (const modelName of expectedTables) {
             const modelSchema = schema[modelName];
+            const tableName = modelSchema.modelName;
 
-            const migrationCode = generateMigration(modelName, modelSchema, timestamp, "create");
-            const migrationPath = path.join(migrationsDir, `${timestamp}-create-${modelName}.ts`);
-            fs.writeFileSync(migrationPath, migrationCode);
+            const tableExists = await queryRunner.hasTable(tableName);
 
             const entityCode = generateEntity(modelName, modelSchema);
             const entityPath = path.join(
               entitiesDir,
               `${modelName.charAt(0).toUpperCase() + modelName.slice(1)}.ts`,
             );
-            fs.writeFileSync(entityPath, entityCode);
 
-            changelogContent += `- CREATE Migration: migrations/${timestamp}-create-${modelName}.ts\n`;
-            changelogContent += `- Entity: entities/${modelName.charAt(0).toUpperCase() + modelName.slice(1)}.ts\n\n`;
-          }
-
-          for (const modelName of tablesToUpdate) {
-            const modelSchema = schema[modelName];
-            const tableName = modelSchema.modelName;
-            const existingColumns = existingTables.get(tableName) || [];
-
-            const expectedFields = modelSchema.fields;
-            const existingColumnNames = existingColumns.map((col: { name: string }) => col.name);
-
-            const addColumns = [];
-            const dropColumns = [];
-            const modifyColumns: { name: string; field: FieldAttribute }[] = [];
-
-            for (const [fieldName, field] of Object.entries(expectedFields)) {
-              const dbField = field.fieldName || fieldName;
-              if (!existingColumnNames.includes(dbField)) {
-                addColumns.push({ name: fieldName, field });
-              }
-            }
-
-            for (const existingCol of existingColumns) {
-              const fieldExists = Object.entries(expectedFields).some(
-                ([fieldName, field]) => (field.fieldName || fieldName) === existingCol.name,
-              );
-              if (!fieldExists && existingCol.name !== "id") {
-                dropColumns.push(existingCol.name);
-              }
-            }
-
-            if (addColumns.length > 0 || dropColumns.length > 0 || modifyColumns.length > 0) {
-              const changes = { addColumns, dropColumns, modifyColumns };
-              const migrationCode = generateMigration(
-                modelName,
-                modelSchema,
-                timestamp,
-                "alter",
-                changes,
-              );
-              const migrationPath = path.join(migrationsDir, `${timestamp}-alter-${modelName}.ts`);
+            if (!tableExists) {
+              const migrationFileName = `${timestamp}-create-${modelName}.ts`;
+              const migrationCode = generateMigration(modelName, modelSchema, timestamp, "create");
+              const migrationPath = path.join(migrationsDir, migrationFileName);
               fs.writeFileSync(migrationPath, migrationCode);
-
-              const entityCode = generateEntity(modelName, modelSchema);
-              const entityPath = path.join(
-                entitiesDir,
-                `${modelName.charAt(0).toUpperCase() + modelName.slice(1)}.ts`,
-              );
               fs.writeFileSync(entityPath, entityCode);
 
-              changelogContent += `- ALTER Migration: migrations/${timestamp}-alter-${modelName}.ts\n`;
-              changelogContent += `- Updated Entity: entities/${modelName.charAt(0).toUpperCase() + modelName.slice(1)}.ts\n`;
+              changelogContent += `- CREATE Migration: migrations/${migrationFileName}\n`;
+              changelogContent += `- Entity: entities/${modelName.charAt(0).toUpperCase() + modelName.slice(1)}.ts\n\n`;
+              hasChanges = true;
+            } else {
+              const table = await queryRunner.getTable(tableName);
+              if (!table) continue;
 
-              if (addColumns.length > 0) {
-                changelogContent += `  - Added columns: ${addColumns.map((col) => col.field.fieldName || col.name).join(", ")}\n`;
+              const existingColumns = table.columns.map((col) => col.name);
+              const expectedFields = modelSchema.fields;
+
+              const addColumns = [];
+              const dropColumns = [];
+
+              for (const [fieldName, field] of Object.entries(expectedFields)) {
+                const dbField = field.fieldName || fieldName;
+                if (!existingColumns.includes(dbField)) {
+                  addColumns.push({ name: fieldName, field });
+                }
               }
-              if (dropColumns.length > 0) {
-                changelogContent += `  - Removed columns: ${dropColumns.join(", ")}\n`;
+
+              for (const existingCol of existingColumns) {
+                if (existingCol === "id") continue;
+                const fieldExists = Object.entries(expectedFields).some(
+                  ([fieldName, field]) => (field.fieldName || fieldName) === existingCol,
+                );
+                if (!fieldExists) {
+                  dropColumns.push(existingCol);
+                }
               }
-              changelogContent += "\n";
+
+              if (addColumns.length > 0 || dropColumns.length > 0) {
+                const migrationFileName = `${timestamp}-alter-${modelName}.ts`;
+                const changes = { addColumns, dropColumns, modifyColumns: [] };
+                const migrationCode = generateMigration(
+                  modelName,
+                  modelSchema,
+                  timestamp,
+                  "alter",
+                  changes,
+                );
+                const migrationPath = path.join(migrationsDir, migrationFileName);
+                fs.writeFileSync(migrationPath, migrationCode);
+                fs.writeFileSync(entityPath, entityCode);
+
+                changelogContent += `- ALTER Migration: migrations/${migrationFileName}\n`;
+                changelogContent += `- Updated Entity: entities/${modelName.charAt(0).toUpperCase() + modelName.slice(1)}.ts\n`;
+
+                if (addColumns.length > 0) {
+                  changelogContent += `  - Added columns: ${addColumns.map((col) => col.field.fieldName || col.name).join(", ")}\n`;
+                }
+                if (dropColumns.length > 0) {
+                  changelogContent += `  - Removed columns: ${dropColumns.join(", ")}\n`;
+                }
+                changelogContent += "\n";
+                hasChanges = true;
+              } else {
+                if (fs.existsSync(entityPath)) {
+                  const existingContent = fs.readFileSync(entityPath, "utf-8");
+                  if (existingContent !== entityCode) {
+                    fs.writeFileSync(entityPath, entityCode);
+                    changelogContent += `- Updated entity: entities/${modelName.charAt(0).toUpperCase() + modelName.slice(1)}.ts\n\n`;
+                    hasChanges = true;
+                  }
+                } else {
+                  fs.writeFileSync(entityPath, entityCode);
+                  changelogContent += `- Generated missing entity: entities/${modelName.charAt(0).toUpperCase() + modelName.slice(1)}.ts\n\n`;
+                  hasChanges = true;
+                }
+              }
             }
           }
 
-          if (missingTables.length > 0) {
-            changelogContent += `\nTables to create: ${missingTables.map((t) => schema[t].modelName).join(", ")}\n`;
+          await queryRunner.release();
+
+          if (!hasChanges) {
+            changelogContent += "Schema is up to date. No changes detected.\n";
           }
 
           return {
