@@ -90,7 +90,7 @@ function generateEntity(
   let entityCode = `@Entity('${tableName}')\nexport class ${className} {\n`;
 
   entityCode += "  @PrimaryColumn('text')\n";
-  entityCode += "  id: string;\n\n";
+  entityCode += "  id!: string;\n\n";
 
   for (const [fieldName, field] of Object.entries(modelSchema.fields)) {
     const fieldAttr = field as FieldAttribute;
