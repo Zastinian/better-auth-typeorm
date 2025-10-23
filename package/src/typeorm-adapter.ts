@@ -103,8 +103,6 @@ function generateEntity(
 
     if (!fieldAttr.required) {
       columnOptions.push("nullable: true");
-    } else {
-      columnOptions.push("nullable: false");
     }
 
     if (fieldAttr.unique || dbField === "email" || dbField === "token") {
@@ -114,7 +112,11 @@ function generateEntity(
     const columnOptionsStr = columnOptions.length > 0 ? `, { ${columnOptions.join(", ")} }` : "";
 
     entityCode += `  @Column('${typeInfo.type}'${columnOptionsStr})\n`;
-    entityCode += `  ${fieldName}: ${fieldAttr.type === "date" ? "Date" : fieldAttr.type === "boolean" ? "boolean" : "string"};\n\n`;
+    const tsType =
+      fieldAttr.type === "date" ? "Date" : fieldAttr.type === "boolean" ? "boolean" : "string";
+    const nullableModifier = fieldAttr.required ? "!" : "";
+    const nullableType = fieldAttr.required ? "" : " | null";
+    entityCode += `  ${fieldName}${nullableModifier}: ${tsType}${nullableType};\n\n`;
   }
 
   entityCode += "}";
