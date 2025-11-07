@@ -44,6 +44,33 @@ function mapFieldTypeToTypeORM(
   }
 }
 
+function convertOperatorToTypeORM(operator: Where["operator"], value: unknown) {
+  switch (operator) {
+    case "ne":
+      return Not(value);
+    case "lt":
+      return LessThan(value);
+    case "lte":
+      return LessThanOrEqual(value);
+    case "gt":
+      return MoreThan(value);
+    case "gte":
+      return MoreThanOrEqual(value);
+    case "in":
+      return In(value as unknown[]);
+    case "not_in":
+      return Not(In(value as unknown[]));
+    case "contains":
+      return Like(`%${value}%`);
+    case "starts_with":
+      return Like(`${value}%`);
+    case "ends_with":
+      return Like(`%${value}`);
+    default:
+      return value;
+  }
+}
+
 function generateEntity(
   modelName: string,
   modelSchema: {
@@ -249,33 +276,6 @@ export const typeormAdapter = (dataSource: DataSource) =>
         try {
           const manager = queryRunner.manager;
 
-          const convertOperatorToTypeORM = (operator: string, value: unknown) => {
-            switch (operator) {
-              case "eq":
-                return value;
-              case "ne":
-                return Not(value);
-              case "gt":
-                return MoreThan(value);
-              case "lt":
-                return LessThan(value);
-              case "gte":
-                return MoreThanOrEqual(value);
-              case "lte":
-                return LessThanOrEqual(value);
-              case "in":
-                return In(value as unknown[]);
-              case "contains":
-                return Like(`%${value}%`);
-              case "starts_with":
-                return Like(`${value}%`);
-              case "ends_with":
-                return Like(`%${value}`);
-              default:
-                return value;
-            }
-          };
-
           const convertWhereToFindOptions = (where: Where[]): FindOptionsWhere<ObjectLiteral> => {
             if (!where || where.length === 0) return {};
 
@@ -327,7 +327,7 @@ export const typeormAdapter = (dataSource: DataSource) =>
               await repository.update(findOptions, update);
               return null;
             },
-            async delete(data: { model: string; where: Where[] }): Promise<void> {
+            async delete(data): Promise<void> {
               const { model, where } = data;
               const repository = manager.getRepository(model);
               const findOptions = convertWhereToFindOptions(where);
@@ -366,24 +366,20 @@ export const typeormAdapter = (dataSource: DataSource) =>
 
               return result as T[];
             },
-            async count(data: { model: string; where?: Where[] }): Promise<number> {
+            async count(data): Promise<number> {
               const { model, where } = data;
               const repository = manager.getRepository(model);
               const findOptions = convertWhereToFindOptions(where || []);
               return await repository.count({ where: findOptions });
             },
-            async updateMany(data: {
-              model: string;
-              where: Where[];
-              update: Record<string, unknown>;
-            }): Promise<number> {
+            async updateMany(data): Promise<number> {
               const { model, where, update } = data;
               const repository = manager.getRepository(model);
               const findOptions = convertWhereToFindOptions(where);
               const result = await repository.update(findOptions, update);
               return result.affected || 0;
             },
-            async deleteMany(data: { model: string; where: Where[] }): Promise<number> {
+            async deleteMany(data): Promise<number> {
               const { model, where } = data;
               const repository = manager.getRepository(model);
               const findOptions = convertWhereToFindOptions(where);
@@ -415,33 +411,6 @@ export const typeormAdapter = (dataSource: DataSource) =>
       transformOutput,
       transformWhereClause,
     }) => {
-      function convertOperatorToTypeORM(operator: string, value: unknown) {
-        switch (operator) {
-          case "eq":
-            return value;
-          case "ne":
-            return Not(value);
-          case "gt":
-            return MoreThan(value);
-          case "lt":
-            return LessThan(value);
-          case "gte":
-            return MoreThanOrEqual(value);
-          case "lte":
-            return LessThanOrEqual(value);
-          case "in":
-            return In(value as unknown[]);
-          case "contains":
-            return Like(`%${value}%`);
-          case "starts_with":
-            return Like(`${value}%`);
-          case "ends_with":
-            return Like(`%${value}`);
-          default:
-            return value;
-        }
-      }
-
       function convertWhereToFindOptions(
         model: string,
         where?: Where[],
