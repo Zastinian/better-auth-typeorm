@@ -264,7 +264,16 @@ function generateMigration(
   return migrationCode;
 }
 
-export const typeormAdapter = (dataSource: DataSource) =>
+export interface TypeormAdapterOptions {
+  outputDir?: string;
+  migrationsDir?: string;
+  entitiesDir?: string;
+}
+
+export const typeormAdapter = (
+  dataSource: DataSource,
+  options?: TypeormAdapterOptions,
+) =>
   createAdapterFactory({
     config: {
       adapterId: "typeorm",
@@ -634,9 +643,13 @@ export const typeormAdapter = (dataSource: DataSource) =>
         async createSchema({ tables, file }) {
           try {
             const timestamp = Date.now();
-            const typeormDir = path.resolve("./typeorm");
-            const migrationsDir = path.resolve("./typeorm/migrations");
-            const entitiesDir = path.resolve("./typeorm/entities");
+            const typeormDir = path.resolve(options?.outputDir ?? "./typeorm");
+            const migrationsDir = path.resolve(
+              options?.migrationsDir ?? `${options?.outputDir ?? "./typeorm"}/migrations`,
+            );
+            const entitiesDir = path.resolve(
+              options?.entitiesDir ?? `${options?.outputDir ?? "./typeorm"}/entities`,
+            );
 
             if (!fs.existsSync(typeormDir)) {
               fs.mkdirSync(typeormDir, { recursive: true });
