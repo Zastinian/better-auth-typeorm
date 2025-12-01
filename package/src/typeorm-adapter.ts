@@ -270,10 +270,7 @@ export interface TypeormAdapterOptions {
   entitiesDir?: string;
 }
 
-export const typeormAdapter = (
-  dataSource: DataSource,
-  options?: TypeormAdapterOptions,
-) =>
+export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterOptions) =>
   createAdapterFactory({
     config: {
       adapterId: "typeorm",
@@ -415,6 +412,7 @@ export const typeormAdapter = (
     },
     adapter: ({
       getModelName,
+      getDefaultModelName,
       getFieldName,
       transformInput,
       transformOutput,
@@ -450,7 +448,13 @@ export const typeormAdapter = (
           forceAllowId?: boolean;
         }): Promise<R> {
           const { model, data: values, select } = data;
-          const transformed = await transformInput(values, model, "create", data.forceAllowId);
+          const defaultModelName = getDefaultModelName(model);
+          const transformed = await transformInput(
+            values,
+            defaultModelName,
+            "create",
+            data.forceAllowId,
+          );
 
           const repositoryName = getModelName(model);
           const repository = dataSource.getRepository(repositoryName);
@@ -458,7 +462,7 @@ export const typeormAdapter = (
           try {
             const entity = repository.create(transformed);
             const result = await repository.save(entity);
-            const output = await transformOutput(result, model, select);
+            const output = await transformOutput(result, defaultModelName, select);
             return output as R;
           } catch (error: unknown) {
             throw new BetterAuthError(
@@ -473,6 +477,7 @@ export const typeormAdapter = (
           update: T;
         }): Promise<T | null> {
           const { model, where, update } = data;
+          const defaultModelName = getDefaultModelName(model);
           const repositoryName = getModelName(model);
           const repository = dataSource.getRepository(repositoryName);
 
@@ -480,7 +485,7 @@ export const typeormAdapter = (
             const findOptions = convertWhereToFindOptions(model, where);
             const transformed = await transformInput(
               update as Record<string, unknown>,
-              model,
+              defaultModelName,
               "update",
             );
 
@@ -495,7 +500,7 @@ export const typeormAdapter = (
                   where: findOptions,
                 });
                 if (result) {
-                  const output = await transformOutput(result, model);
+                  const output = await transformOutput(result, defaultModelName);
                   return output as T;
                 }
               }
@@ -531,6 +536,7 @@ export const typeormAdapter = (
           select?: string[];
         }): Promise<T | null> {
           const { model, where, select } = data;
+          const defaultModelName = getDefaultModelName(model);
           const repositoryName = getModelName(model);
           const repository = dataSource.getRepository(repositoryName);
 
@@ -541,7 +547,7 @@ export const typeormAdapter = (
               select: select,
             });
             if (result) {
-              const output = await transformOutput(result, model, select);
+              const output = await transformOutput(result, defaultModelName, select);
               return output as T;
             }
             return null;
@@ -560,6 +566,7 @@ export const typeormAdapter = (
           sortBy?: { field: string; direction: "asc" | "desc" };
         }): Promise<T[]> {
           const { model, where, limit, offset, sortBy } = data;
+          const defaultModelName = getDefaultModelName(model);
           const repositoryName = getModelName(model);
           const repository = dataSource.getRepository(repositoryName);
 
@@ -577,7 +584,9 @@ export const typeormAdapter = (
                 : undefined,
             });
 
-            const transformed = await Promise.all(result.map((r) => transformOutput(r, model)));
+            const transformed = await Promise.all(
+              result.map((r) => transformOutput(r, defaultModelName)),
+            );
             return transformed as T[];
           } catch (error: unknown) {
             throw new BetterAuthError(
@@ -608,12 +617,13 @@ export const typeormAdapter = (
           update: Record<string, unknown>;
         }): Promise<number> {
           const { model, where, update } = data;
+          const defaultModelName = getDefaultModelName(model);
           const repositoryName = getModelName(model);
           const repository = dataSource.getRepository(repositoryName);
 
           try {
             const findOptions = convertWhereToFindOptions(model, where);
-            const transformed = await transformInput(update, model, "update");
+            const transformed = await transformInput(update, defaultModelName, "update");
 
             const result = await repository.update(findOptions, transformed);
             return result.affected || 0;
