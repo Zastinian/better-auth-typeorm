@@ -579,7 +579,8 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               skip: offset || 0,
               order: sortBy?.field
                 ? {
-                    [sortBy.field]: sortBy.direction === "desc" ? "DESC" : "ASC",
+                    [getFieldName({ model, field: sortBy.field })]:
+                      sortBy.direction === "desc" ? "DESC" : "ASC",
                   }
                 : undefined,
             });
