@@ -1,20 +1,20 @@
+import { BetterAuthError, generateId } from "better-auth";
+import { type CleanedWhere, createAdapterFactory } from "better-auth/adapters";
+import type { Where } from "better-auth/types";
+import * as fs from "fs";
+import * as path from "path";
 import {
   type DataSource,
   type FindOptionsWhere,
-  type ObjectLiteral,
+  In,
   LessThan,
   LessThanOrEqual,
+  Like,
   MoreThan,
   MoreThanOrEqual,
-  Like,
   Not,
-  In,
+  type ObjectLiteral,
 } from "typeorm";
-import { BetterAuthError } from "better-auth";
-import type { BetterAuthOptions, Where } from "better-auth/types";
-import { createAdapterFactory, type DBAdapter } from "better-auth/adapters";
-import * as fs from "fs";
-import * as path from "path";
 
 type FieldAttribute = {
   type: string | string[];
@@ -268,147 +268,21 @@ export interface TypeormAdapterOptions {
   outputDir?: string;
   migrationsDir?: string;
   entitiesDir?: string;
+  usePlural?: boolean;
+  debugLogs?: boolean;
 }
 
 export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterOptions) =>
   createAdapterFactory({
     config: {
       adapterId: "typeorm",
-      transaction: async (fn) => {
-        const queryRunner = dataSource.createQueryRunner();
-        await queryRunner.connect();
-        await queryRunner.startTransaction();
-
-        try {
-          const manager = queryRunner.manager;
-
-          const convertWhereToFindOptions = (where: Where[]): FindOptionsWhere<ObjectLiteral> => {
-            if (!where || where.length === 0) return {};
-
-            const findOptions: FindOptionsWhere<ObjectLiteral> = {};
-
-            for (const w of where) {
-              if (!w.operator || w.operator === "eq") {
-                findOptions[w.field] = w.value;
-              } else {
-                findOptions[w.field] = convertOperatorToTypeORM(w.operator, w.value);
-              }
-            }
-
-            return findOptions;
-          };
-
-          const transactionalAdapter: DBAdapter<BetterAuthOptions> = {
-            id: "typeorm",
-            async create<T extends Record<string, unknown>, R = T>(data: {
-              model: string;
-              data: Omit<T, "id">;
-              select?: string[];
-              forceAllowId?: boolean;
-            }): Promise<R> {
-              const { model, data: values } = data;
-              const repository = manager.getRepository(model);
-              const entity = repository.create(values as Record<string, unknown>);
-              const result = await repository.save(entity);
-              return result as R;
-            },
-            async update<T>(data: {
-              model: string;
-              where: Where[];
-              update: Record<string, unknown>;
-            }): Promise<T | null> {
-              const { model, where, update } = data;
-              const repository = manager.getRepository(model);
-              const findOptions = convertWhereToFindOptions(where);
-
-              if (where.length === 1) {
-                const updatedRecord = await repository.findOne({ where: findOptions });
-                if (updatedRecord) {
-                  await repository.update(findOptions, update);
-                  const result = await repository.findOne({ where: findOptions });
-                  return result as T;
-                }
-              }
-
-              await repository.update(findOptions, update);
-              return null;
-            },
-            async delete(data): Promise<void> {
-              const { model, where } = data;
-              const repository = manager.getRepository(model);
-              const findOptions = convertWhereToFindOptions(where);
-              await repository.delete(findOptions);
-            },
-            async findOne<T>(data: {
-              model: string;
-              where: Where[];
-              select?: string[];
-            }): Promise<T | null> {
-              const { model, where, select } = data;
-              const repository = manager.getRepository(model);
-              const findOptions = convertWhereToFindOptions(where);
-              const result = await repository.findOne({ where: findOptions, select });
-              return result as T | null;
-            },
-            async findMany<T>(data: {
-              model: string;
-              where?: Where[];
-              limit?: number;
-              offset?: number;
-              sortBy?: { field: string; direction: "asc" | "desc" };
-            }): Promise<T[]> {
-              const { model, where, limit, offset, sortBy } = data;
-              const repository = manager.getRepository(model);
-              const findOptions = convertWhereToFindOptions(where || []);
-
-              const result = await repository.find({
-                where: findOptions,
-                take: limit || 100,
-                skip: offset || 0,
-                order: sortBy?.field
-                  ? { [sortBy.field]: sortBy.direction === "desc" ? "DESC" : "ASC" }
-                  : undefined,
-              });
-
-              return result as T[];
-            },
-            async count(data): Promise<number> {
-              const { model, where } = data;
-              const repository = manager.getRepository(model);
-              const findOptions = convertWhereToFindOptions(where || []);
-              return await repository.count({ where: findOptions });
-            },
-            async updateMany(data): Promise<number> {
-              const { model, where, update } = data;
-              const repository = manager.getRepository(model);
-              const findOptions = convertWhereToFindOptions(where);
-              const result = await repository.update(findOptions, update);
-              return result.affected || 0;
-            },
-            async deleteMany(data): Promise<number> {
-              const { model, where } = data;
-              const repository = manager.getRepository(model);
-              const findOptions = convertWhereToFindOptions(where);
-              const result = await repository.delete(findOptions);
-              return result.affected || 0;
-            },
-            transaction: async <TR>(
-              callback: (trx: DBAdapter<BetterAuthOptions>) => Promise<TR>,
-            ): Promise<TR> => {
-              return callback(transactionalAdapter);
-            },
-          };
-
-          const result = await fn(transactionalAdapter);
-          await queryRunner.commitTransaction();
-          return result;
-        } catch (error) {
-          await queryRunner.rollbackTransaction();
-          throw error;
-        } finally {
-          await queryRunner.release();
-        }
-      },
+      adapterName: "TypeORM",
+      usePlural: options?.usePlural ?? false,
+      debugLogs: options?.debugLogs ?? false,
+      supportsJSON: false,
+      supportsDates: true,
+      supportsBooleans: true,
+      supportsNumericIds: true,
     },
     adapter: ({
       getModelName,
@@ -421,36 +295,41 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
       function convertWhereToFindOptions(
         model: string,
         where?: Where[],
-      ): FindOptionsWhere<ObjectLiteral> {
-        if (!where || where.length === 0) return {};
-
-        const cleanedWhere = transformWhereClause({ model, where });
-        const findOptions: FindOptionsWhere<ObjectLiteral> = {};
-
-        for (const w of cleanedWhere) {
-          const field = getFieldName({ model, field: w.field });
-
-          if (!w.operator || w.operator === "eq") {
-            findOptions[field] = w.value;
-          } else {
-            findOptions[field] = convertOperatorToTypeORM(w.operator, w.value);
-          }
+      ): FindOptionsWhere<ObjectLiteral>[] {
+        if (!where || where.length === 0) {
+          return [{}];
         }
 
-        return findOptions;
+        const cleanedWhere = transformWhereClause({ model, where });
+        const findOptions: FindOptionsWhere<ObjectLiteral>[] = [];
+        let currentGroup: FindOptionsWhere<ObjectLiteral> = {};
+        findOptions.push(currentGroup);
+
+        for (const w of cleanedWhere) {
+          if (w.connector === "OR") {
+            currentGroup = {};
+            findOptions.push(currentGroup);
+          }
+          const field = w.field;
+          const value =
+            !w.operator || w.operator === "eq"
+              ? w.value
+              : convertOperatorToTypeORM(w.operator, w.value);
+
+          currentGroup[field] = value;
+        }
+
+        return findOptions; // Returns array now, TypeORM accepts this as OR
       }
 
       return {
-        async create<T extends Record<string, unknown>, R = T>(data: {
-          model: string;
-          data: Omit<T, "id">;
-          select?: string[];
-          forceAllowId?: boolean;
-        }): Promise<R> {
-          const { model, data: values, select } = data;
+        async create({ data, model, select }) {
+          if (!dataSource.isInitialized) {
+            await dataSource.initialize();
+          }
           const defaultModelName = getDefaultModelName(model);
           const transformed = await transformInput(
-            values,
+            data,
             defaultModelName,
             "create",
             data.forceAllowId,
@@ -460,10 +339,18 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           const repository = dataSource.getRepository(repositoryName);
 
           try {
-            const entity = repository.create(transformed);
+            const entityData: Record<string, any> = {};
+            for (const key of Object.keys(data as object)) {
+              const dbField = getFieldName({ model, field: key });
+              entityData[key] = transformed[dbField] ?? (data as any)[key];
+            }
+            if (!entityData.id) {
+              entityData.id = generateId();
+            }
+            const entity = repository.create(entityData);
             const result = await repository.save(entity);
             const output = await transformOutput(result, defaultModelName, select);
-            return output as R;
+            return output as typeof data;
           } catch (error: unknown) {
             throw new BetterAuthError(
               `Failed to create ${model}: ${error instanceof Error ? error.message : String(error)}`,
@@ -471,18 +358,17 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           }
         },
 
-        async update<T>(data: {
-          model: string;
-          where: Where[];
-          update: T;
-        }): Promise<T | null> {
-          const { model, where, update } = data;
+        async update({ model, where, update }) {
+          if (!dataSource.isInitialized) {
+            await dataSource.initialize();
+          }
           const defaultModelName = getDefaultModelName(model);
           const repositoryName = getModelName(model);
           const repository = dataSource.getRepository(repositoryName);
 
           try {
-            const findOptions = convertWhereToFindOptions(model, where);
+            const findOptionsArr = convertWhereToFindOptions(model, where);
+            const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
             const transformed = await transformInput(
               update as Record<string, unknown>,
               defaultModelName,
@@ -495,18 +381,28 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               });
 
               if (updatedRecord) {
-                await repository.update(findOptions, transformed);
+                const entityData: Record<string, any> = {};
+                for (const key of Object.keys(update as object)) {
+                  const dbField = getFieldName({ model, field: key });
+                  entityData[key] = transformed[dbField] ?? (update as any)[key];
+                }
+                await repository.update(findOptions, entityData);
                 const result = await repository.findOne({
                   where: findOptions,
                 });
                 if (result) {
                   const output = await transformOutput(result, defaultModelName);
-                  return output as T;
+                  return output as typeof update;
                 }
               }
             }
 
-            await repository.update(findOptions, transformed);
+            const entityData: Record<string, any> = {};
+            for (const key of Object.keys(update as object)) {
+              const dbField = getFieldName({ model, field: key });
+              entityData[key] = transformed[dbField] ?? (update as any)[key];
+            }
+            await repository.update(findOptions, entityData);
             return null;
           } catch (error: unknown) {
             throw new BetterAuthError(
@@ -515,13 +411,16 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           }
         },
 
-        async delete(data: { model: string; where: Where[] }): Promise<void> {
-          const { model, where } = data;
+        async delete({ model, where }) {
+          if (!dataSource.isInitialized) {
+            await dataSource.initialize();
+          }
           const repositoryName = getModelName(model);
           const repository = dataSource.getRepository(repositoryName);
 
           try {
-            const findOptions = convertWhereToFindOptions(model, where);
+            const findOptionsArr = convertWhereToFindOptions(model, where);
+            const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
             await repository.delete(findOptions);
           } catch (error: unknown) {
             throw new BetterAuthError(
@@ -530,12 +429,18 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           }
         },
 
-        async findOne<T>(data: {
+        async findOne<T>({
+          model,
+          where,
+          select,
+        }: {
           model: string;
-          where: Where[];
-          select?: string[];
+          where: CleanedWhere[];
+          select?: string[] | undefined;
         }): Promise<T | null> {
-          const { model, where, select } = data;
+          if (!dataSource.isInitialized) {
+            await dataSource.initialize();
+          }
           const defaultModelName = getDefaultModelName(model);
           const repositoryName = getModelName(model);
           const repository = dataSource.getRepository(repositoryName);
@@ -558,14 +463,27 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           }
         },
 
-        async findMany<T>(data: {
+        async findMany<T>({
+          model,
+          where,
+          limit,
+          sortBy,
+          offset,
+        }: {
           model: string;
-          where?: Where[];
-          limit?: number;
-          offset?: number;
-          sortBy?: { field: string; direction: "asc" | "desc" };
+          where?: CleanedWhere[] | undefined;
+          limit: number;
+          sortBy?:
+            | {
+                field: string;
+                direction: "asc" | "desc";
+              }
+            | undefined;
+          offset?: number | undefined;
         }): Promise<T[]> {
-          const { model, where, limit, offset, sortBy } = data;
+          if (!dataSource.isInitialized) {
+            await dataSource.initialize();
+          }
           const defaultModelName = getDefaultModelName(model);
           const repositoryName = getModelName(model);
           const repository = dataSource.getRepository(repositoryName);
@@ -579,8 +497,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               skip: offset || 0,
               order: sortBy?.field
                 ? {
-                    [getFieldName({ model, field: sortBy.field })]:
-                      sortBy.direction === "desc" ? "DESC" : "ASC",
+                    [sortBy.field]: sortBy.direction === "desc" ? "DESC" : "ASC",
                   }
                 : undefined,
             });
@@ -596,8 +513,10 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           }
         },
 
-        async count(data: { model: string; where?: Where[] }): Promise<number> {
-          const { model, where } = data;
+        async count({ model, where }) {
+          if (!dataSource.isInitialized) {
+            await dataSource.initialize();
+          }
           const repositoryName = getModelName(model);
           const repository = dataSource.getRepository(repositoryName);
 
@@ -612,21 +531,26 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           }
         },
 
-        async updateMany(data: {
-          model: string;
-          where: Where[];
-          update: Record<string, unknown>;
-        }): Promise<number> {
-          const { model, where, update } = data;
+        async updateMany({ model, where, update }) {
+          if (!dataSource.isInitialized) {
+            await dataSource.initialize();
+          }
           const defaultModelName = getDefaultModelName(model);
           const repositoryName = getModelName(model);
           const repository = dataSource.getRepository(repositoryName);
 
           try {
-            const findOptions = convertWhereToFindOptions(model, where);
+            const findOptionsArr = convertWhereToFindOptions(model, where);
+            const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
             const transformed = await transformInput(update, defaultModelName, "update");
 
-            const result = await repository.update(findOptions, transformed);
+            const entityData: Record<string, any> = {};
+            const updateData = update as Record<string, any>;
+            for (const key of Object.keys(updateData)) {
+              const dbField = getFieldName({ model, field: key });
+              entityData[key] = transformed[dbField] ?? (update as any)[key];
+            }
+            const result = await repository.update(findOptions, entityData);
             return result.affected || 0;
           } catch (error: unknown) {
             throw new BetterAuthError(
@@ -635,13 +559,16 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           }
         },
 
-        async deleteMany(data: { model: string; where: Where[] }): Promise<number> {
-          const { model, where } = data;
+        async deleteMany({ model, where }) {
+          if (!dataSource.isInitialized) {
+            await dataSource.initialize();
+          }
           const repositoryName = getModelName(model);
           const repository = dataSource.getRepository(repositoryName);
 
           try {
-            const findOptions = convertWhereToFindOptions(model, where);
+            const findOptionsArr = convertWhereToFindOptions(model, where);
+            const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
             const result = await repository.delete(findOptions);
             return result.affected || 0;
           } catch (error: unknown) {
@@ -652,6 +579,9 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         },
 
         async createSchema({ tables, file }) {
+          if (!dataSource.isInitialized) {
+            await dataSource.initialize();
+          }
           try {
             const timestamp = Date.now();
             const typeormDir = path.resolve(options?.outputDir ?? "./typeorm");
@@ -709,7 +639,9 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
                 hasChanges = true;
               } else {
                 const table = await queryRunner.getTable(tableName);
-                if (!table) continue;
+                if (!table) {
+                  continue;
+                }
 
                 const existingColumns = table.columns.map((col) => col.name);
                 const expectedFields = modelSchema.fields;
@@ -725,7 +657,9 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
                 }
 
                 for (const existingCol of existingColumns) {
-                  if (existingCol === "id") continue;
+                  if (existingCol === "id") {
+                    continue;
+                  }
                   const fieldExists = Object.entries(expectedFields).some(
                     ([fieldName, field]) => (field.fieldName || fieldName) === existingCol,
                   );
