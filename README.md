@@ -20,6 +20,7 @@
 - 🔄 **CRUD Operations**: Full support for create, read, update, and delete operations
 - ⚡ **Efficient Queries**: Built-in pagination, sorting, and filtering support
 - 🔒 **Secure Operations**: Proper transaction handling and error management
+- 🗑️ **Soft Delete**: Built-in soft delete support
 
 ## 🚀 Quick Start
 
@@ -111,6 +112,28 @@ export const dataSource = new DataSource({
   migrationsRun: true,
 });
 ```
+
+### Enable Soft Delete
+
+You can enable soft delete for entities by passing list of entities that should use soft delete by passing softDeleteEnabledEntities option to the adapter:
+
+```typescript
+import { typeormAdapter } from "@hedystia/better-auth-typeorm";
+
+export const auth = betterAuth({
+  database: typeormAdapter(dataSource, {
+    softDeleteEnabledEntities: ["user", "member"],
+  }),
+});
+```
+
+**Options:**
+
+- `softDeleteEnabledEntities` (optional): Enable soft delete for entities. Default: undefined
+
+**Note:**
+- If you enable soft delete, you will need to add the `@DeleteDateColumn` decorator with column name `deletedAt` to your entities.
+- Entities that are not in the `softDeleteEnabledEntities` list will not use soft delete.
 
 ## 🌟 Why use this adapter?
 
