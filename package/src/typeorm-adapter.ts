@@ -5,6 +5,7 @@ import * as fs from "fs";
 import * as path from "path";
 import {
   type DataSource,
+  type DeleteResult,
   type FindOptionsWhere,
   In,
   LessThan,
@@ -14,7 +15,8 @@ import {
   MoreThanOrEqual,
   Not,
   type ObjectLiteral,
-  Repository,
+  type Repository,
+  type UpdateResult,
 } from "typeorm";
 
 type FieldAttribute = {
@@ -323,17 +325,19 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
 
         return findOptions; // Returns array now, TypeORM accepts this as OR
       }
-      async function deleteOrSoftDeleteHandler(repository: Repository<ObjectLiteral>, findOptions: FindOptionsWhere<ObjectLiteral>, repositoryName: string) {
-        let result;
+      async function deleteOrSoftDeleteHandler(
+        repository: Repository<ObjectLiteral>,
+        findOptions: FindOptionsWhere<ObjectLiteral>,
+        repositoryName: string,
+      ) {
+        let result: UpdateResult | DeleteResult;
         if (options?.softDeleteEnabledEntities?.includes(repositoryName)) {
           const hasDeletedAtColumn = repository.metadata.columns.some(
             (column) => column.propertyName === "deletedAt",
           );
 
           if (!hasDeletedAtColumn) {
-            throw new BetterAuthError(
-              `Failed to soft delete. Couldn't locate deletedAt column.`,
-            );
+            throw new BetterAuthError(`Failed to soft delete. Couldn't locate deletedAt column.`);
           }
           result = await repository.softDelete(findOptions);
         } else {
