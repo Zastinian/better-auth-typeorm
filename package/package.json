@@ -1,6 +1,6 @@
 {
   "name": "@hedystia/better-auth-typeorm",
-  "version": "0.4.5",
+  "version": "0.5.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Zastinian/better-auth-typeorm.git"
@@ -33,9 +33,19 @@
   "bugs": {
     "url": "https://github.com/Zastinian/better-auth-typeorm/issues"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "homepage": "https://github.com/Zastinian/better-auth-typeorm",
-  "keywords": ["better-auth", "typeorm", "plugin", "auth", "better", "adapter", "typescript"],
+  "keywords": [
+    "better-auth",
+    "typeorm",
+    "plugin",
+    "auth",
+    "better",
+    "adapter",
+    "typescript"
+  ],
   "license": "MIT",
   "peerDependenciesMeta": {
     "better-auth": {
