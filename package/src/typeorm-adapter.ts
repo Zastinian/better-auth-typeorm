@@ -14,6 +14,7 @@ import {
   MoreThanOrEqual,
   Not,
   type ObjectLiteral,
+  Repository,
 } from "typeorm";
 
 type FieldAttribute = {
@@ -270,6 +271,7 @@ export interface TypeormAdapterOptions {
   entitiesDir?: string;
   usePlural?: boolean;
   debugLogs?: boolean;
+  softDeleteEnabledEntities?: string[];
 }
 
 export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterOptions) =>
@@ -321,7 +323,24 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
 
         return findOptions; // Returns array now, TypeORM accepts this as OR
       }
+      async function deleteOrSoftDeleteHandler(repository: Repository<ObjectLiteral>, findOptions: FindOptionsWhere<ObjectLiteral>, repositoryName: string) {
+        let result;
+        if (options?.softDeleteEnabledEntities?.includes(repositoryName)) {
+          const hasDeletedAtColumn = repository.metadata.columns.some(
+            (column) => column.propertyName === "deletedAt",
+          );
 
+          if (!hasDeletedAtColumn) {
+            throw new BetterAuthError(
+              `Failed to soft delete. Couldn't locate deletedAt column.`,
+            );
+          }
+          result = await repository.softDelete(findOptions);
+        } else {
+          result = await repository.delete(findOptions);
+        }
+        return result;
+      }
       return {
         async create({ data, model, select }) {
           if (!dataSource.isInitialized) {
@@ -421,7 +440,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           try {
             const findOptionsArr = convertWhereToFindOptions(model, where);
             const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
-            await repository.delete(findOptions);
+            await deleteOrSoftDeleteHandler(repository, findOptions, repositoryName);
           } catch (error: unknown) {
             throw new BetterAuthError(
               `Failed to delete ${model}: ${error instanceof Error ? error.message : String(error)}`,
@@ -569,7 +588,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           try {
             const findOptionsArr = convertWhereToFindOptions(model, where);
             const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
-            const result = await repository.delete(findOptions);
+            const result = await deleteOrSoftDeleteHandler(repository, findOptions, repositoryName);
             return result.affected || 0;
           } catch (error: unknown) {
             throw new BetterAuthError(
