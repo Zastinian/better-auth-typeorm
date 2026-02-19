@@ -112,7 +112,7 @@
         "noDuplicateClassMembers": "error",
         "noDuplicateObjectKeys": "error",
         "noDuplicateParameters": "error",
-        "noExplicitAny": "off",
+        "noExplicitAny": "error",
         "noEmptyBlockStatements": "error",
         "noFallthroughSwitchClause": "error",
         "noFunctionAssign": "error",
