@@ -287,34 +287,70 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
       supportsDates: true,
       supportsBooleans: true,
       supportsNumericIds: true,
+      disableTransformInput: true,
+      disableTransformOutput: true,
     },
     adapter: ({
       getModelName,
       getDefaultModelName,
+      getDefaultFieldName,
       getFieldName,
       transformInput,
       transformOutput,
       transformWhereClause,
     }) => {
+      function toDbColumns(data: ObjectLiteral, model: string): Record<string, unknown> {
+        const defaultModelName = getDefaultModelName(model);
+        const dbData: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(data)) {
+          try {
+            const dbCol = getFieldName({ field: key, model: defaultModelName });
+            dbData[dbCol] = value;
+          } catch {
+            dbData[key] = value;
+          }
+        }
+        return dbData;
+      }
+
       function convertWhereToFindOptions(
         model: string,
         where?: Where[],
+        action?:
+          | "create"
+          | "update"
+          | "findOne"
+          | "findMany"
+          | "updateMany"
+          | "delete"
+          | "deleteMany"
+          | "count",
       ): FindOptionsWhere<ObjectLiteral>[] {
         if (!where || where.length === 0) {
           return [{}];
         }
 
-        const cleanedWhere = transformWhereClause({ model, where });
+        const cleanedWhere = transformWhereClause({
+          model,
+          where,
+          action: action ?? "findMany",
+        });
         const findOptions: FindOptionsWhere<ObjectLiteral>[] = [];
         let currentGroup: FindOptionsWhere<ObjectLiteral> = {};
         findOptions.push(currentGroup);
 
+        const defaultModelName = getDefaultModelName(model);
         for (const w of cleanedWhere) {
           if (w.connector === "OR") {
             currentGroup = {};
             findOptions.push(currentGroup);
           }
-          const field = w.field;
+          let field: string;
+          try {
+            field = getDefaultFieldName({ field: w.field, model: defaultModelName });
+          } catch {
+            field = w.field;
+          }
           const value =
             !w.operator || w.operator === "eq"
               ? w.value
@@ -323,7 +359,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           currentGroup[field] = value;
         }
 
-        return findOptions; // Returns array now, TypeORM accepts this as OR
+        return findOptions;
       }
       async function deleteOrSoftDeleteHandler(
         repository: Repository<ObjectLiteral>,
@@ -346,33 +382,36 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         return result;
       }
       return {
-        async create({ data, model, select }) {
+        async create({ data, model }) {
           if (!dataSource.isInitialized) {
             await dataSource.initialize();
           }
           const defaultModelName = getDefaultModelName(model);
           const transformed = await transformInput(
-            data,
+            data as Record<string, unknown>,
             defaultModelName,
             "create",
-            data.forceAllowId,
           );
 
           const repositoryName = getModelName(model);
           const repository = dataSource.getRepository(repositoryName);
 
           try {
-            const entityData: Record<string, any> = {};
-            for (const key of Object.keys(data as object)) {
-              const dbField = getFieldName({ model, field: key });
-              entityData[key] = transformed[dbField] ?? (data as any)[key];
+            const entityData: Record<string, unknown> = {};
+            for (const [dbField, value] of Object.entries(transformed)) {
+              try {
+                const entityProp = getDefaultFieldName({ field: dbField, model: defaultModelName });
+                entityData[entityProp] = value;
+              } catch {
+                entityData[dbField] = value;
+              }
             }
             if (!entityData.id) {
               entityData.id = generateId();
             }
             const entity = repository.create(entityData);
             const result = await repository.save(entity);
-            const output = await transformOutput(result, defaultModelName, select);
+            const output = await transformOutput(toDbColumns(result, model), defaultModelName);
             return output as typeof data;
           } catch (error: unknown) {
             throw new BetterAuthError(
@@ -390,7 +429,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           const repository = dataSource.getRepository(repositoryName);
 
           try {
-            const findOptionsArr = convertWhereToFindOptions(model, where);
+            const findOptionsArr = convertWhereToFindOptions(model, where, "update");
             const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
             const transformed = await transformInput(
               update as Record<string, unknown>,
@@ -398,33 +437,36 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               "update",
             );
 
+            const entityData: Record<string, unknown> = {};
+            for (const [dbField, value] of Object.entries(transformed)) {
+              try {
+                const entityProp = getDefaultFieldName({ field: dbField, model: defaultModelName });
+                entityData[entityProp] = value;
+              } catch {
+                entityData[dbField] = value;
+              }
+            }
+
             if (where.length === 1) {
               const updatedRecord = await repository.findOne({
                 where: findOptions,
               });
 
               if (updatedRecord) {
-                const entityData: Record<string, any> = {};
-                for (const key of Object.keys(update as object)) {
-                  const dbField = getFieldName({ model, field: key });
-                  entityData[key] = transformed[dbField] ?? (update as any)[key];
-                }
                 await repository.update(findOptions, entityData);
                 const result = await repository.findOne({
                   where: findOptions,
                 });
                 if (result) {
-                  const output = await transformOutput(result, defaultModelName);
+                  const output = await transformOutput(
+                    toDbColumns(result, model),
+                    defaultModelName,
+                  );
                   return output as typeof update;
                 }
               }
             }
 
-            const entityData: Record<string, any> = {};
-            for (const key of Object.keys(update as object)) {
-              const dbField = getFieldName({ model, field: key });
-              entityData[key] = transformed[dbField] ?? (update as any)[key];
-            }
             await repository.update(findOptions, entityData);
             return null;
           } catch (error: unknown) {
@@ -442,7 +484,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           const repository = dataSource.getRepository(repositoryName);
 
           try {
-            const findOptionsArr = convertWhereToFindOptions(model, where);
+            const findOptionsArr = convertWhereToFindOptions(model, where, "delete");
             const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
             await deleteOrSoftDeleteHandler(repository, findOptions, repositoryName);
           } catch (error: unknown) {
@@ -469,13 +511,17 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           const repository = dataSource.getRepository(repositoryName);
 
           try {
-            const findOptions = convertWhereToFindOptions(model, where);
+            const findOptions = convertWhereToFindOptions(model, where, "findOne");
             const result = await repository.findOne({
               where: findOptions,
               select: select,
             });
             if (result) {
-              const output = await transformOutput(result, defaultModelName, select);
+              const output = await transformOutput(
+                toDbColumns(result, model),
+                defaultModelName,
+                select,
+              );
               return output as T;
             }
             return null;
@@ -512,7 +558,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           const repository = dataSource.getRepository(repositoryName);
 
           try {
-            const findOptions = convertWhereToFindOptions(model, where);
+            const findOptions = convertWhereToFindOptions(model, where, "findMany");
 
             const result = await repository.find({
               where: findOptions,
@@ -526,7 +572,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
             });
 
             const transformed = await Promise.all(
-              result.map((r) => transformOutput(r, defaultModelName)),
+              result.map((r) => transformOutput(toDbColumns(r, model), defaultModelName)),
             );
             return transformed as T[];
           } catch (error: unknown) {
@@ -544,7 +590,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           const repository = dataSource.getRepository(repositoryName);
 
           try {
-            const findOptions = convertWhereToFindOptions(model, where);
+            const findOptions = convertWhereToFindOptions(model, where, "count");
             const result = await repository.count({ where: findOptions });
             return result;
           } catch (error: unknown) {
@@ -563,15 +609,18 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           const repository = dataSource.getRepository(repositoryName);
 
           try {
-            const findOptionsArr = convertWhereToFindOptions(model, where);
+            const findOptionsArr = convertWhereToFindOptions(model, where, "updateMany");
             const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
             const transformed = await transformInput(update, defaultModelName, "update");
 
-            const entityData: Record<string, any> = {};
-            const updateData = update as Record<string, any>;
-            for (const key of Object.keys(updateData)) {
-              const dbField = getFieldName({ model, field: key });
-              entityData[key] = transformed[dbField] ?? (update as any)[key];
+            const entityData: Record<string, unknown> = {};
+            for (const [dbField, value] of Object.entries(transformed)) {
+              try {
+                const entityProp = getDefaultFieldName({ field: dbField, model: defaultModelName });
+                entityData[entityProp] = value;
+              } catch {
+                entityData[dbField] = value;
+              }
             }
             const result = await repository.update(findOptions, entityData);
             return result.affected || 0;
@@ -590,7 +639,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           const repository = dataSource.getRepository(repositoryName);
 
           try {
-            const findOptionsArr = convertWhereToFindOptions(model, where);
+            const findOptionsArr = convertWhereToFindOptions(model, where, "deleteMany");
             const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
             const result = await deleteOrSoftDeleteHandler(repository, findOptions, repositoryName);
             return result.affected || 0;
@@ -669,8 +718,11 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
                 const existingColumns = table.columns.map((col) => col.name);
                 const expectedFields = modelSchema.fields;
 
-                const addColumns = [];
-                const dropColumns = [];
+                const addColumns: Array<{
+                  name: string;
+                  field: (typeof expectedFields)[keyof typeof expectedFields];
+                }> = [];
+                const dropColumns: Array<string> = [];
 
                 for (const [fieldName, field] of Object.entries(expectedFields)) {
                   const dbField = field.fieldName || fieldName;
