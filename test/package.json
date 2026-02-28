@@ -2,7 +2,8 @@
   "name": "test",
   "private": true,
   "scripts": {
-    "test": "bun --bun vitest run adapter.test.ts"
+    "test": "bun run generate && bun --bun vitest run adapter.test.ts",
+    "generate": "bunx @better-auth/cli generate"
   },
   "devDependencies": {
     "@better-auth/cli": "^1.4.3",
