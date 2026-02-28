@@ -34,12 +34,12 @@
       "linter": {
         "rules": {
           "style": {
-            "useConst": "off",
-            "useImportType": "off"
+            "useConst": "error",
+            "useImportType": "error"
           },
           "correctness": {
-            "noUnusedVariables": "off",
-            "noUnusedImports": "off"
+            "noUnusedVariables": "error",
+            "noUnusedImports": "error"
           }
         }
       }
