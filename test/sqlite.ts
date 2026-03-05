@@ -15,6 +15,18 @@ const dataSource = new DataSource({
 await dataSource.initialize();
 
 export const auth = betterAuth({
+  baseURL: "http://localhost:3000",
+  secret: "test-secret-better-auth-typeorm-1234",
   database: typeormAdapter(dataSource),
+  emailAndPassword: {
+    enabled: true,
+  },
+  user: {
+    deleteUser: {
+      enabled: true,
+    },
+  },
   plugins: [organization(), twoFactor()],
 });
+
+export { dataSource };
