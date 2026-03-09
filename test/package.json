@@ -2,7 +2,7 @@
   "name": "test",
   "private": true,
   "scripts": {
-    "test": "bun test",
+    "test": "bun run generate && bun test",
     "generate": "rm -rf typeorm && bunx auth generate --config sqlite.ts -y"
   },
   "devDependencies": {
