@@ -1,6 +1,6 @@
 {
   "name": "@hedystia/better-auth-typeorm",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Zastinian/better-auth-typeorm.git"
@@ -15,7 +15,7 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
-    "better-auth": "^1.4.19",
+    "better-auth": "^1.5.0",
     "typeorm": "^0.3.27"
   },
   "peerDependencies": {
