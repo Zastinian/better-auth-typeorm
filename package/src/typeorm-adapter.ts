@@ -1,4 +1,4 @@
-import { BetterAuthError, generateId } from "better-auth";
+import { BetterAuthError } from "better-auth";
 import { type CleanedWhere, createAdapterFactory } from "better-auth/adapters";
 import type { Where } from "better-auth/types";
 import * as fs from "fs";
@@ -376,8 +376,8 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               const dbField = getFieldName({ model, field: key });
               entityData[key] = transformed[dbField] ?? data[key];
             }
-            if (!entityData.id) {
-              entityData.id = generateId();
+            if (!entityData.id && transformed.id) {
+              entityData.id = transformed.id;
             }
             const entity = repository.create(entityData);
             const result = await repository.save(entity);
