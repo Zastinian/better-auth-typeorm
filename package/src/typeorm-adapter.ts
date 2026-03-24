@@ -4,7 +4,7 @@ import type { Where } from "better-auth/types";
 import * as fs from "fs";
 import * as path from "path";
 import {
-  type DataSource,
+  DataSource,
   type DeleteResult,
   type FindOptionsWhere,
   In,
@@ -23,13 +23,59 @@ type FieldAttribute = {
   type: string | string[];
   required?: boolean;
   unique?: boolean;
+  index?: boolean;
+  bigint?: boolean;
   fieldName?: string;
   defaultValue?: unknown | (() => unknown);
+  onUpdate?: () => unknown;
+  references?: {
+    model: string;
+    field: string;
+    onDelete?: "no action" | "restrict" | "cascade" | "set null" | "set default";
+  };
 };
+
+function toPascalCase(value: string): string {
+  return value
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join("");
+}
+
+function toRelationPropertyName(fieldName: string): string {
+  if (fieldName.endsWith("Id") && fieldName.length > 2) {
+    return fieldName.slice(0, -2);
+  }
+  return `${fieldName}Relation`;
+}
+
+function getDateColumnType(dataSource: DataSource): string {
+  switch (dataSource.options.type) {
+    case "postgres":
+    case "cockroachdb":
+      return "timestamptz";
+    case "mssql":
+      return "datetime2";
+    case "mysql":
+    case "mariadb":
+    case "better-sqlite3":
+    case "sqlite":
+    case "sqljs":
+    case "capacitor":
+    case "cordova":
+    case "expo":
+    case "react-native":
+      return "datetime";
+    default:
+      return "timestamp";
+  }
+}
 
 function mapFieldTypeToTypeORM(
   fieldType: string | string[],
-  _: FieldAttribute,
+  field: FieldAttribute,
+  dataSource: DataSource,
 ): { type: string; length?: string } {
   const typeStr = Array.isArray(fieldType) ? fieldType[0] || "string" : fieldType;
 
@@ -37,14 +83,60 @@ function mapFieldTypeToTypeORM(
     case "string":
       return { type: "text" };
     case "number":
-      return { type: "integer" };
+      return { type: field.bigint ? "bigint" : "integer" };
     case "boolean":
       return { type: "boolean" };
     case "date":
-      return { type: "date" };
+      return { type: getDateColumnType(dataSource) };
     default:
       return { type: "text" };
   }
+}
+
+function formatDefaultValueForEntity(field: FieldAttribute): string | null {
+  if (field.defaultValue === undefined) {
+    return null;
+  }
+
+  if (typeof field.defaultValue === "function") {
+    if ((Array.isArray(field.type) ? field.type[0] : field.type) === "date") {
+      return "default: () => 'CURRENT_TIMESTAMP'";
+    }
+    return null;
+  }
+
+  if (typeof field.defaultValue === "string") {
+    return `default: ${JSON.stringify(field.defaultValue)}`;
+  }
+
+  if (typeof field.defaultValue === "number" || typeof field.defaultValue === "boolean") {
+    return `default: ${String(field.defaultValue)}`;
+  }
+
+  return null;
+}
+
+function formatDefaultValueForMigration(field: FieldAttribute): string | null {
+  if (field.defaultValue === undefined) {
+    return null;
+  }
+
+  if (typeof field.defaultValue === "function") {
+    if ((Array.isArray(field.type) ? field.type[0] : field.type) === "date") {
+      return JSON.stringify("CURRENT_TIMESTAMP");
+    }
+    return null;
+  }
+
+  if (
+    typeof field.defaultValue === "string" ||
+    typeof field.defaultValue === "number" ||
+    typeof field.defaultValue === "boolean"
+  ) {
+    return JSON.stringify(field.defaultValue);
+  }
+
+  return null;
 }
 
 function convertOperatorToTypeORM(operator: Where["operator"], value: unknown) {
@@ -75,6 +167,7 @@ function convertOperatorToTypeORM(operator: Where["operator"], value: unknown) {
 }
 
 function generateEntity(
+  dataSource: DataSource,
   modelName: string,
   modelSchema: {
     modelName: string;
@@ -83,10 +176,24 @@ function generateEntity(
     order?: number;
   },
 ): string {
-  const className = modelName.charAt(0).toUpperCase() + modelName.slice(1);
+  const className = toPascalCase(modelName);
   const tableName = modelSchema.modelName;
+  const referencedModels = new Set<string>();
+  const typeormImports = new Set(["Column", "Entity", "Index", "PrimaryColumn"]);
 
-  const imports = "import { Column, Entity, PrimaryColumn } from 'typeorm';\n\n";
+  for (const field of Object.values(modelSchema.fields)) {
+    if (field.references) {
+      referencedModels.add(field.references.model);
+      typeormImports.add("JoinColumn");
+      typeormImports.add("ManyToOne");
+    }
+  }
+
+  const imports = [`import { ${Array.from(typeormImports).sort().join(", ")} } from 'typeorm';`];
+  for (const referencedModel of Array.from(referencedModels).sort()) {
+    imports.push(`import { ${toPascalCase(referencedModel)} } from './${toPascalCase(referencedModel)}';`);
+  }
+  imports.push("");
   let entityCode = `@Entity('${tableName}')\nexport class ${className} {\n`;
 
   entityCode += "  @PrimaryColumn('text')\n";
@@ -95,7 +202,7 @@ function generateEntity(
   for (const [fieldName, field] of Object.entries(modelSchema.fields)) {
     const fieldAttr = field as FieldAttribute;
     const dbField = fieldAttr.fieldName || fieldName;
-    const typeInfo = mapFieldTypeToTypeORM(fieldAttr.type, fieldAttr);
+    const typeInfo = mapFieldTypeToTypeORM(fieldAttr.type, fieldAttr, dataSource);
 
     const columnOptions: string[] = [];
 
@@ -109,22 +216,46 @@ function generateEntity(
       columnOptions.push("unique: true");
     }
 
+    const defaultValue = formatDefaultValueForEntity(fieldAttr);
+    if (defaultValue) {
+      columnOptions.push(defaultValue);
+    }
+
     const columnOptionsStr = columnOptions.length > 0 ? `, { ${columnOptions.join(", ")} }` : "";
+
+    if (fieldAttr.index) {
+      entityCode += `  @Index('${tableName}_${dbField}_idx')\n`;
+    }
 
     entityCode += `  @Column('${typeInfo.type}'${columnOptionsStr})\n`;
     const tsType =
-      fieldAttr.type === "date" ? "Date" : fieldAttr.type === "boolean" ? "boolean" : "string";
+      fieldAttr.type === "date"
+        ? "Date"
+        : fieldAttr.type === "boolean"
+          ? "boolean"
+          : fieldAttr.type === "number"
+            ? "number"
+            : "string";
     const nullableModifier = fieldAttr.required ? "!" : "";
     const nullableType = fieldAttr.required ? "" : " | null";
     entityCode += `  ${fieldName}${nullableModifier}: ${tsType}${nullableType};\n\n`;
+
+    if (fieldAttr.references) {
+      const relationClass = toPascalCase(fieldAttr.references.model);
+      const relationPropertyName = toRelationPropertyName(fieldName);
+      entityCode += `  @ManyToOne(() => ${relationClass}, { onDelete: '${(fieldAttr.references.onDelete || "cascade").toUpperCase()}', nullable: ${fieldAttr.required ? "false" : "true"} })\n`;
+      entityCode += `  @JoinColumn({ name: '${dbField}', referencedColumnName: '${fieldAttr.references.field}' })\n`;
+      entityCode += `  ${relationPropertyName}${fieldAttr.required ? "!" : "?"}: ${relationClass};\n\n`;
+    }
   }
 
   entityCode += "}";
 
-  return imports + entityCode;
+  return `${imports.join("\n")}\n${entityCode}`;
 }
 
 function generateMigration(
+  dataSource: DataSource,
   modelName: string,
   modelSchema: {
     modelName: string;
@@ -140,11 +271,11 @@ function generateMigration(
     modifyColumns?: { name: string; field: FieldAttribute }[];
   },
 ): string {
-  const className = `${action.charAt(0).toUpperCase() + action.slice(1)}${modelName.charAt(0).toUpperCase() + modelName.slice(1)}${timestamp}`;
+  const className = `${action.charAt(0).toUpperCase() + action.slice(1)}${toPascalCase(modelName)}${timestamp}`;
   const tableName = modelSchema.modelName;
 
   let migrationCode =
-    "import { type MigrationInterface, type QueryRunner, Table, TableIndex, TableColumn } from 'typeorm';\n\n";
+    "import { type MigrationInterface, type QueryRunner, Table, TableColumn, TableForeignKey, TableIndex } from 'typeorm';\n\n";
   migrationCode += `export class ${className} implements MigrationInterface {\n`;
   migrationCode += "  public async up(queryRunner: QueryRunner): Promise<void> {\n";
 
@@ -155,7 +286,7 @@ function generateMigration(
     migrationCode += "        columns: [\n";
 
     const columns: string[] = [];
-    const indexes: string[] = [];
+    const postCreateStatements: string[] = [];
 
     columns.push(`          {
             name: 'id',
@@ -166,7 +297,7 @@ function generateMigration(
     for (const [fieldName, field] of Object.entries(modelSchema.fields)) {
       const fieldAttr = field as FieldAttribute;
       const dbField = fieldAttr.fieldName || fieldName;
-      const typeInfo = mapFieldTypeToTypeORM(fieldAttr.type, fieldAttr);
+      const typeInfo = mapFieldTypeToTypeORM(fieldAttr.type, fieldAttr, dataSource);
 
       if (fieldName === "id" || dbField === "id") {
         continue;
@@ -184,16 +315,36 @@ function generateMigration(
         columnDef += "            isNullable: true,\n";
       }
 
+      if (fieldAttr.unique || dbField === "email" || dbField === "token") {
+        columnDef += "            isUnique: true,\n";
+      }
+
+      const defaultValue = formatDefaultValueForMigration(fieldAttr);
+      if (defaultValue) {
+        columnDef += `            default: ${defaultValue},\n`;
+      }
+
       columnDef += "          }";
       columns.push(columnDef);
 
-      if (fieldAttr.unique || dbField === "email") {
-        indexes.push(`    await queryRunner.createIndex(
+      if (fieldAttr.index) {
+        postCreateStatements.push(`    await queryRunner.createIndex(
       '${tableName}',
       new TableIndex({
-        name: 'IDX_${tableName}_${dbField}',
+        name: '${tableName}_${dbField}_idx',
         columnNames: ['${dbField}'],
-        isUnique: true,
+      }),
+    );`);
+      }
+
+      if (fieldAttr.references) {
+        postCreateStatements.push(`    await queryRunner.createForeignKey(
+      '${tableName}',
+      new TableForeignKey({
+        columnNames: ['${dbField}'],
+        referencedTableName: '${fieldAttr.references.model}',
+        referencedColumnNames: ['${fieldAttr.references.field}'],
+        onDelete: '${(fieldAttr.references.onDelete || "cascade").toUpperCase()}',
       }),
     );`);
       }
@@ -204,21 +355,33 @@ function generateMigration(
     migrationCode += "      }),\n";
     migrationCode += "    );\n\n";
 
-    if (indexes.length > 0) {
-      migrationCode += `${indexes.join("\n\n")}\n`;
+    if (postCreateStatements.length > 0) {
+      migrationCode += `${postCreateStatements.join("\n\n")}\n`;
     }
   } else if (action === "alter" && changes) {
     if (changes.addColumns && changes.addColumns.length > 0) {
       for (const { name, field } of changes.addColumns) {
-        const typeInfo = mapFieldTypeToTypeORM(field.type, field);
+        const typeInfo = mapFieldTypeToTypeORM(field.type, field, dataSource);
         migrationCode += `    await queryRunner.addColumn('${tableName}', new TableColumn({\n`;
         migrationCode += `      name: '${field.fieldName || name}',\n`;
         migrationCode += `      type: '${typeInfo.type}',\n`;
         migrationCode += `      isNullable: ${!field.required},\n`;
-        if (field.unique) {
+        if (field.unique || (field.fieldName || name) === "email" || (field.fieldName || name) === "token") {
           migrationCode += "      isUnique: true,\n";
         }
+        const defaultValue = formatDefaultValueForMigration(field);
+        if (defaultValue) {
+          migrationCode += `      default: ${defaultValue},\n`;
+        }
         migrationCode += "    }));\n\n";
+        if (field.index) {
+          const dbField = field.fieldName || name;
+          migrationCode += `    await queryRunner.createIndex('${tableName}', new TableIndex({ name: '${tableName}_${dbField}_idx', columnNames: ['${dbField}'] }));\n\n`;
+        }
+        if (field.references) {
+          const dbField = field.fieldName || name;
+          migrationCode += `    await queryRunner.createForeignKey('${tableName}', new TableForeignKey({ columnNames: ['${dbField}'], referencedTableName: '${field.references.model}', referencedColumnNames: ['${field.references.field}'], onDelete: '${(field.references.onDelete || "cascade").toUpperCase()}' }));\n\n`;
+        }
       }
     }
 
@@ -230,13 +393,17 @@ function generateMigration(
 
     if (changes.modifyColumns && changes.modifyColumns.length > 0) {
       for (const { name, field } of changes.modifyColumns) {
-        const typeInfo = mapFieldTypeToTypeORM(field.type, field);
+        const typeInfo = mapFieldTypeToTypeORM(field.type, field, dataSource);
         migrationCode += `    await queryRunner.changeColumn('${tableName}', '${name}', new TableColumn({\n`;
         migrationCode += `      name: '${field.fieldName || name}',\n`;
         migrationCode += `      type: '${typeInfo.type}',\n`;
         migrationCode += `      isNullable: ${!field.required},\n`;
-        if (field.unique) {
+        if (field.unique || (field.fieldName || name) === "email" || (field.fieldName || name) === "token") {
           migrationCode += "      isUnique: true,\n";
+        }
+        const defaultValue = formatDefaultValueForMigration(field);
+        if (defaultValue) {
+          migrationCode += `      default: ${defaultValue},\n`;
         }
         migrationCode += "    }));\n\n";
       }
@@ -274,6 +441,18 @@ export interface TypeormAdapterOptions {
   usePlural?: boolean;
   debugLogs?: boolean;
   softDeleteEnabledEntities?: string[];
+}
+
+function createSchemaGenerationDataSource(dataSource: DataSource): DataSource {
+  return new DataSource({
+    ...dataSource.options,
+    entities: [],
+    migrations: [],
+    subscribers: [],
+    migrationsRun: false,
+    synchronize: false,
+    dropSchema: false,
+  });
 }
 
 export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterOptions) =>
@@ -612,8 +791,13 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         },
 
         async createSchema({ tables, file }) {
-          if (!dataSource.isInitialized) {
-            await dataSource.initialize();
+          let schemaDataSource = dataSource;
+          let destroySchemaDataSource = false;
+
+          if (!schemaDataSource.isInitialized) {
+            schemaDataSource = createSchemaGenerationDataSource(dataSource);
+            destroySchemaDataSource = true;
+            await schemaDataSource.initialize();
           }
           try {
             const timestamp = Date.now();
@@ -635,7 +819,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               fs.mkdirSync(entitiesDir, { recursive: true });
             }
 
-            const queryRunner = dataSource.createQueryRunner();
+            const queryRunner = schemaDataSource.createQueryRunner();
             await queryRunner.connect();
 
             let changelogContent = `# TypeORM Schema Changes - ${new Date().toISOString()}\n\n`;
@@ -649,7 +833,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
 
               const tableExists = await queryRunner.hasTable(tableName);
 
-              const entityCode = generateEntity(modelName, modelSchema);
+              const entityCode = generateEntity(dataSource, modelName, modelSchema);
               const entityPath = path.join(
                 entitiesDir,
                 `${modelName.charAt(0).toUpperCase() + modelName.slice(1)}.ts`,
@@ -658,6 +842,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               if (!tableExists) {
                 const migrationFileName = `${timestamp}-create-${modelName}.ts`;
                 const migrationCode = generateMigration(
+                  dataSource,
                   modelName,
                   modelSchema,
                   timestamp,
@@ -705,6 +890,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
                   const migrationFileName = `${timestamp}-alter-${modelName}.ts`;
                   const changes = { addColumns, dropColumns, modifyColumns: [] };
                   const migrationCode = generateMigration(
+                    dataSource,
                     modelName,
                     modelSchema,
                     timestamp,
@@ -744,6 +930,9 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
             }
 
             await queryRunner.release();
+            if (destroySchemaDataSource) {
+              await schemaDataSource.destroy();
+            }
 
             if (!hasChanges) {
               changelogContent += "Schema is up to date. No changes detected.\n";
@@ -754,6 +943,9 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               path: file ?? "typeorm/changelog.txt",
             };
           } catch (error) {
+            if (destroySchemaDataSource && schemaDataSource.isInitialized) {
+              await schemaDataSource.destroy();
+            }
             throw new BetterAuthError(
               `Failed to create schema: ${error instanceof Error ? error.message : String(error)}`,
             );
