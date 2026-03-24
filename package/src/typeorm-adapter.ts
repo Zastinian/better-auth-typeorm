@@ -19,6 +19,95 @@ import {
   type UpdateResult,
 } from "typeorm";
 
+function tryGetRepository(
+  dataSource: DataSource,
+  tableName: string,
+  requiredFields?: string[],
+): Repository<ObjectLiteral> | null {
+  try {
+    const metadata = dataSource.entityMetadatas.find(
+      (meta) =>
+        meta.tableName === tableName || meta.name === tableName || meta.targetName === tableName,
+    );
+    if (!metadata) {
+      return null;
+    }
+    if (requiredFields) {
+      for (const field of requiredFields) {
+        const hasColumn = metadata.columns.some(
+          (col) => col.propertyName === field || col.databaseName === field,
+        );
+        if (!hasColumn) {
+          return null;
+        }
+      }
+    }
+    return dataSource.getRepository(tableName);
+  } catch {
+    return null;
+  }
+}
+
+function escapeId(dataSource: DataSource, name: string): string {
+  return dataSource.driver.escape(name);
+}
+
+async function ensureTableExists(
+  dataSource: DataSource,
+  tableName: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  const queryRunner = dataSource.createQueryRunner();
+  await queryRunner.connect();
+  try {
+    const tableExists = await queryRunner.hasTable(tableName);
+    if (!tableExists) {
+      const columns = Object.entries(data)
+        .map(([key, value]) => {
+          const escaped = escapeId(dataSource, key);
+          if (key === "id") {
+            return `${escaped} text PRIMARY KEY`;
+          }
+          const type =
+            typeof value === "boolean"
+              ? "boolean"
+              : typeof value === "number"
+                ? "integer"
+                : value instanceof Date
+                  ? "datetime"
+                  : "text";
+          return `${escaped} ${type}`;
+        })
+        .join(", ");
+      await queryRunner.query(
+        `CREATE TABLE IF NOT EXISTS ${escapeId(dataSource, tableName)} (${columns})`,
+      );
+    } else {
+      const table = await queryRunner.getTable(tableName);
+      if (table) {
+        const existingColumns = new Set(table.columns.map((col) => col.name));
+        for (const [key, value] of Object.entries(data)) {
+          if (!existingColumns.has(key)) {
+            const type =
+              typeof value === "boolean"
+                ? "boolean"
+                : typeof value === "number"
+                  ? "integer"
+                  : value instanceof Date
+                    ? "datetime"
+                    : "text";
+            await queryRunner.query(
+              `ALTER TABLE ${escapeId(dataSource, tableName)} ADD COLUMN ${escapeId(dataSource, key)} ${type}`,
+            );
+          }
+        }
+      }
+    }
+  } finally {
+    await queryRunner.release();
+  }
+}
+
 type FieldAttribute = {
   type: string | string[];
   required?: boolean;
@@ -128,11 +217,11 @@ function formatDefaultValueForMigration(field: FieldAttribute): string | null {
     return null;
   }
 
-  if (
-    typeof field.defaultValue === "string" ||
-    typeof field.defaultValue === "number" ||
-    typeof field.defaultValue === "boolean"
-  ) {
+  if (typeof field.defaultValue === "string") {
+    return JSON.stringify(`'${field.defaultValue}'`);
+  }
+
+  if (typeof field.defaultValue === "number" || typeof field.defaultValue === "boolean") {
     return JSON.stringify(field.defaultValue);
   }
 
@@ -543,11 +632,354 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         }
         return result;
       }
+      function buildWhereSql(
+        model: string,
+        action:
+          | "update"
+          | "updateMany"
+          | "findOne"
+          | "findMany"
+          | "delete"
+          | "deleteMany"
+          | "count",
+        where?: Where[],
+      ) {
+        const cleaned = where?.length ? transformWhereClause({ model, where, action }) : [];
+
+        if (!cleaned.length) {
+          return { sql: "", params: [] as unknown[] };
+        }
+
+        const params: unknown[] = [];
+        const parts: string[] = [];
+
+        for (let i = 0; i < cleaned.length; i++) {
+          const w = cleaned[i];
+          const prefix = i === 0 ? "" : ` ${w.connector ?? "AND"} `;
+          const col = escapeId(dataSource, w.field);
+
+          const push = (value: unknown) => {
+            params.push(value);
+            return "?";
+          };
+
+          switch (w.operator ?? "eq") {
+            case "eq":
+              parts.push(`${prefix}${col} = ${push(w.value)}`);
+              break;
+            case "ne":
+              parts.push(`${prefix}${col} <> ${push(w.value)}`);
+              break;
+            case "lt":
+              parts.push(`${prefix}${col} < ${push(w.value)}`);
+              break;
+            case "lte":
+              parts.push(`${prefix}${col} <= ${push(w.value)}`);
+              break;
+            case "gt":
+              parts.push(`${prefix}${col} > ${push(w.value)}`);
+              break;
+            case "gte":
+              parts.push(`${prefix}${col} >= ${push(w.value)}`);
+              break;
+            case "contains":
+              parts.push(`${prefix}${col} LIKE ${push(`%${String(w.value)}%`)}`);
+              break;
+            case "starts_with":
+              parts.push(`${prefix}${col} LIKE ${push(`${String(w.value)}%`)}`);
+              break;
+            case "ends_with":
+              parts.push(`${prefix}${col} LIKE ${push(`%${String(w.value)}`)}`);
+              break;
+            case "in": {
+              const values = Array.isArray(w.value) ? w.value : [];
+              if (!values.length) {
+                parts.push(`${prefix}1 = 0`);
+              } else {
+                const placeholders = values.map((v) => push(v)).join(", ");
+                parts.push(`${prefix}${col} IN (${placeholders})`);
+              }
+              break;
+            }
+            case "not_in": {
+              const values = Array.isArray(w.value) ? w.value : [];
+              if (!values.length) {
+                parts.push(`${prefix}1 = 1`);
+              } else {
+                const placeholders = values.map((v) => push(v)).join(", ");
+                parts.push(`${prefix}${col} NOT IN (${placeholders})`);
+              }
+              break;
+            }
+            default:
+              parts.push(`${prefix}${col} = ${push(w.value)}`);
+              break;
+          }
+        }
+
+        return {
+          sql: ` WHERE ${parts.join("")}`,
+          params,
+        };
+      }
+
+      async function rawCreate(model: string, data: Record<string, unknown>, select?: string[]) {
+        const defaultModelName = getDefaultModelName(model);
+        const tableName = getModelName(model);
+        const transformed = await transformInput(
+          data,
+          defaultModelName,
+          "create",
+          data.forceAllowId as boolean,
+        );
+
+        await ensureTableExists(dataSource, tableName, transformed);
+
+        const entries = Object.entries(transformed).filter(([, value]) => value !== undefined);
+        const columns = entries.map(([key]) => escapeId(dataSource, key)).join(", ");
+        const placeholders = entries.map(() => "?").join(", ");
+        const values = entries.map(([, value]) =>
+          value instanceof Date ? value.toISOString() : value,
+        );
+
+        const queryRunner = dataSource.createQueryRunner();
+        await queryRunner.connect();
+        try {
+          await queryRunner.query(
+            `INSERT INTO ${escapeId(dataSource, tableName)} (${columns}) VALUES (${placeholders})`,
+            values,
+          );
+
+          const rows = await queryRunner.query(
+            `SELECT * FROM ${escapeId(dataSource, tableName)} WHERE ${escapeId(dataSource, "id")} = ?`,
+            [transformed.id],
+          );
+
+          if (rows[0]) {
+            return await transformOutput(rows[0], defaultModelName, select);
+          }
+          return await transformOutput(transformed, defaultModelName, select);
+        } finally {
+          await queryRunner.release();
+        }
+      }
+
+      async function rawFindOne<T>(
+        model: string,
+        where: CleanedWhere[],
+        select?: string[],
+      ): Promise<T | null> {
+        const defaultModelName = getDefaultModelName(model);
+        const tableName = getModelName(model);
+        const { sql, params } = buildWhereSql(model, "findOne", where);
+
+        const queryRunner = dataSource.createQueryRunner();
+        await queryRunner.connect();
+        try {
+          const rows = await queryRunner.query(
+            `SELECT * FROM ${escapeId(dataSource, tableName)}${sql} LIMIT 1`,
+            params,
+          );
+          if (!rows[0]) {
+            return null;
+          }
+          return (await transformOutput(rows[0], defaultModelName, select)) as T;
+        } finally {
+          await queryRunner.release();
+        }
+      }
+
+      async function rawFindMany<T>(
+        model: string,
+        where?: CleanedWhere[],
+        limit?: number,
+        sortBy?: { field: string; direction: "asc" | "desc" },
+        offset?: number,
+      ): Promise<T[]> {
+        const defaultModelName = getDefaultModelName(model);
+        const tableName = getModelName(model);
+        const { sql, params } = buildWhereSql(model, "findMany", where);
+
+        let query = `SELECT * FROM ${escapeId(dataSource, tableName)}${sql}`;
+
+        if (sortBy?.field) {
+          query += ` ORDER BY ${escapeId(dataSource, sortBy.field)} ${sortBy.direction === "desc" ? "DESC" : "ASC"}`;
+        }
+        query += ` LIMIT ${limit || 100}`;
+        if (offset) {
+          query += ` OFFSET ${offset}`;
+        }
+
+        const queryRunner = dataSource.createQueryRunner();
+        await queryRunner.connect();
+        try {
+          const rows = await queryRunner.query(query, params);
+          const transformed = await Promise.all(
+            rows.map((r: Record<string, unknown>) => transformOutput(r, defaultModelName)),
+          );
+          return transformed as T[];
+        } finally {
+          await queryRunner.release();
+        }
+      }
+
+      async function rawUpdate(model: string, where: Where[], update: Record<string, unknown>) {
+        const defaultModelName = getDefaultModelName(model);
+        const tableName = getModelName(model);
+        const transformed = await transformInput(update, defaultModelName, "update");
+
+        const { sql: whereSql, params: whereParams } = buildWhereSql(model, "findOne", where);
+
+        const queryRunner = dataSource.createQueryRunner();
+        await queryRunner.connect();
+        try {
+          const existing = await queryRunner.query(
+            `SELECT * FROM ${escapeId(dataSource, tableName)}${whereSql} LIMIT 1`,
+            whereParams,
+          );
+
+          if (!existing[0]) {
+            return null;
+          }
+
+          const setClauses: string[] = [];
+          const setValues: unknown[] = [];
+          for (const [key, value] of Object.entries(transformed)) {
+            if (value !== undefined) {
+              setClauses.push(`${escapeId(dataSource, key)} = ?`);
+              setValues.push(value instanceof Date ? value.toISOString() : value);
+            }
+          }
+
+          if (setClauses.length > 0) {
+            await queryRunner.query(
+              `UPDATE ${escapeId(dataSource, tableName)} SET ${setClauses.join(", ")} WHERE ${escapeId(dataSource, "id")} = ?`,
+              [...setValues, existing[0].id],
+            );
+          }
+
+          const result = await queryRunner.query(
+            `SELECT * FROM ${escapeId(dataSource, tableName)} WHERE ${escapeId(dataSource, "id")} = ?`,
+            [existing[0].id],
+          );
+
+          if (result[0]) {
+            return await transformOutput(result[0], defaultModelName);
+          }
+          return null;
+        } finally {
+          await queryRunner.release();
+        }
+      }
+
+      async function rawDelete(model: string, where: Where[]) {
+        const tableName = getModelName(model);
+        const { sql, params } = buildWhereSql(model, "delete", where);
+
+        const queryRunner = dataSource.createQueryRunner();
+        await queryRunner.connect();
+        try {
+          await queryRunner.query(`DELETE FROM ${escapeId(dataSource, tableName)}${sql}`, params);
+        } finally {
+          await queryRunner.release();
+        }
+      }
+
+      async function rawCount(model: string, where?: Where[]) {
+        const tableName = getModelName(model);
+        const { sql, params } = buildWhereSql(model, "count", where);
+
+        const queryRunner = dataSource.createQueryRunner();
+        await queryRunner.connect();
+        try {
+          const result = await queryRunner.query(
+            `SELECT COUNT(*) as cnt FROM ${escapeId(dataSource, tableName)}${sql}`,
+            params,
+          );
+          return Number(result[0]?.cnt ?? 0);
+        } finally {
+          await queryRunner.release();
+        }
+      }
+
+      async function rawUpdateMany(
+        model: string,
+        where: Where[] | undefined,
+        update: Record<string, unknown>,
+      ) {
+        const defaultModelName = getDefaultModelName(model);
+        const tableName = getModelName(model);
+        const transformed = await transformInput(update, defaultModelName, "update");
+
+        const { sql: whereSql, params: whereParams } = buildWhereSql(model, "updateMany", where);
+
+        const setClauses: string[] = [];
+        const setValues: unknown[] = [];
+        for (const [key, value] of Object.entries(transformed)) {
+          if (value !== undefined) {
+            setClauses.push(`${escapeId(dataSource, key)} = ?`);
+            setValues.push(value instanceof Date ? value.toISOString() : value);
+          }
+        }
+
+        if (setClauses.length === 0) {
+          return 0;
+        }
+
+        const queryRunner = dataSource.createQueryRunner();
+        await queryRunner.connect();
+        try {
+          const result = await queryRunner.query(
+            `UPDATE ${escapeId(dataSource, tableName)} SET ${setClauses.join(", ")}${whereSql}`,
+            [...setValues, ...whereParams],
+          );
+          return typeof result?.changes === "number" ? result.changes : 0;
+        } finally {
+          await queryRunner.release();
+        }
+      }
+
+      async function rawDeleteMany(model: string, where?: Where[]) {
+        const tableName = getModelName(model);
+        const { sql, params } = buildWhereSql(model, "deleteMany", where);
+
+        const queryRunner = dataSource.createQueryRunner();
+        await queryRunner.connect();
+        try {
+          const result = await queryRunner.query(
+            `DELETE FROM ${escapeId(dataSource, tableName)}${sql}`,
+            params,
+          );
+          return typeof result?.changes === "number" ? result.changes : 0;
+        } finally {
+          await queryRunner.release();
+        }
+      }
+
       return {
         async create({ data, model, select }) {
           if (!dataSource.isInitialized) {
             await dataSource.initialize();
           }
+
+          const repositoryName = getModelName(model);
+          const dataFields = Object.keys(data as object);
+          const repository = tryGetRepository(dataSource, repositoryName, dataFields);
+
+          if (!repository) {
+            try {
+              return (await rawCreate(
+                model,
+                data as Record<string, unknown>,
+                select,
+              )) as typeof data;
+            } catch (error: unknown) {
+              throw new BetterAuthError(
+                `Failed to create ${model}: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
+
           const defaultModelName = getDefaultModelName(model);
           const transformed = await transformInput(
             data,
@@ -555,9 +987,6 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
             "create",
             data.forceAllowId,
           );
-
-          const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
 
           try {
             const entityData: Record<string, unknown> = {};
@@ -583,9 +1012,26 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           if (!dataSource.isInitialized) {
             await dataSource.initialize();
           }
-          const defaultModelName = getDefaultModelName(model);
+
           const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
+          const updateFields = [...where.map((w) => w.field), ...Object.keys(update as object)];
+          const repository = tryGetRepository(dataSource, repositoryName, updateFields);
+
+          if (!repository) {
+            try {
+              return (await rawUpdate(
+                model,
+                where,
+                update as Record<string, unknown>,
+              )) as typeof update;
+            } catch (error: unknown) {
+              throw new BetterAuthError(
+                `Failed to update ${model}: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
+
+          const defaultModelName = getDefaultModelName(model);
 
           try {
             const findOptionsArr = convertWhereToFindOptions(model, "update", where);
@@ -596,27 +1042,12 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               "update",
             );
 
-            if (where.length === 1) {
-              const updatedRecord = await repository.findOne({
-                where: findOptions,
-              });
+            const existing = await repository.findOne({
+              where: findOptions,
+            });
 
-              if (updatedRecord) {
-                const entityData: Record<string, unknown> = {};
-                for (const key of Object.keys(update as object)) {
-                  const dbField = getFieldName({ model, field: key });
-                  entityData[key] =
-                    transformed[dbField] ?? (update as Record<string, unknown>)[key];
-                }
-                await repository.update(findOptions, entityData);
-                const result = await repository.findOne({
-                  where: findOptions,
-                });
-                if (result) {
-                  const output = await transformOutput(result, defaultModelName);
-                  return output as typeof update;
-                }
-              }
+            if (!existing) {
+              return null;
             }
 
             const entityData: Record<string, unknown> = {};
@@ -624,7 +1055,14 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               const dbField = getFieldName({ model, field: key });
               entityData[key] = transformed[dbField] ?? (update as Record<string, unknown>)[key];
             }
-            await repository.update(findOptions, entityData);
+            await repository.update({ id: existing.id }, entityData);
+            const result = await repository.findOne({
+              where: { id: existing.id },
+            });
+            if (result) {
+              const output = await transformOutput(result, defaultModelName);
+              return output as typeof update;
+            }
             return null;
           } catch (error: unknown) {
             throw new BetterAuthError(
@@ -637,8 +1075,25 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           if (!dataSource.isInitialized) {
             await dataSource.initialize();
           }
+
           const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
+          const deleteFields = where.map((w) => w.field);
+          const repository = tryGetRepository(
+            dataSource,
+            repositoryName,
+            deleteFields.length ? deleteFields : undefined,
+          );
+
+          if (!repository) {
+            try {
+              await rawDelete(model, where);
+              return;
+            } catch (error: unknown) {
+              throw new BetterAuthError(
+                `Failed to delete ${model}: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
 
           try {
             const findOptionsArr = convertWhereToFindOptions(model, "delete", where);
@@ -663,9 +1118,26 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           if (!dataSource.isInitialized) {
             await dataSource.initialize();
           }
-          const defaultModelName = getDefaultModelName(model);
+
           const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
+          const findFields = [...where.map((w) => w.field), ...(select || [])];
+          const repository = tryGetRepository(
+            dataSource,
+            repositoryName,
+            findFields.length ? findFields : undefined,
+          );
+
+          if (!repository) {
+            try {
+              return await rawFindOne<T>(model, where, select);
+            } catch (error: unknown) {
+              throw new BetterAuthError(
+                `Failed to find ${model}: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
+
+          const defaultModelName = getDefaultModelName(model);
 
           try {
             const findOptions = convertWhereToFindOptions(model, "findOne", where);
@@ -706,9 +1178,29 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           if (!dataSource.isInitialized) {
             await dataSource.initialize();
           }
-          const defaultModelName = getDefaultModelName(model);
+
           const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
+          const findManyFields = [
+            ...(where?.map((w) => w.field) || []),
+            ...(sortBy?.field ? [sortBy.field] : []),
+          ];
+          const repository = tryGetRepository(
+            dataSource,
+            repositoryName,
+            findManyFields.length ? findManyFields : undefined,
+          );
+
+          if (!repository) {
+            try {
+              return await rawFindMany<T>(model, where, limit, sortBy, offset);
+            } catch (error: unknown) {
+              throw new BetterAuthError(
+                `Failed to find many ${model}: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
+
+          const defaultModelName = getDefaultModelName(model);
 
           try {
             const findOptions = convertWhereToFindOptions(model, "findMany", where);
@@ -739,8 +1231,24 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           if (!dataSource.isInitialized) {
             await dataSource.initialize();
           }
+
           const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
+          const countFields = where?.map((w) => w.field) || [];
+          const repository = tryGetRepository(
+            dataSource,
+            repositoryName,
+            countFields.length ? countFields : undefined,
+          );
+
+          if (!repository) {
+            try {
+              return await rawCount(model, where);
+            } catch (error: unknown) {
+              throw new BetterAuthError(
+                `Failed to count ${model}: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
 
           try {
             const findOptions = convertWhereToFindOptions(model, "count", where);
@@ -757,9 +1265,29 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           if (!dataSource.isInitialized) {
             await dataSource.initialize();
           }
-          const defaultModelName = getDefaultModelName(model);
+
           const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
+          const updateManyFields = [
+            ...(where?.map((w) => w.field) || []),
+            ...Object.keys(update as object),
+          ];
+          const repository = tryGetRepository(
+            dataSource,
+            repositoryName,
+            updateManyFields.length ? updateManyFields : undefined,
+          );
+
+          if (!repository) {
+            try {
+              return await rawUpdateMany(model, where, update as Record<string, unknown>);
+            } catch (error: unknown) {
+              throw new BetterAuthError(
+                `Failed to update many ${model}: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
+
+          const defaultModelName = getDefaultModelName(model);
 
           try {
             const findOptionsArr = convertWhereToFindOptions(model, "updateMany", where);
@@ -772,6 +1300,17 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               const dbField = getFieldName({ model, field: key });
               entityData[key] = transformed[dbField] ?? update[key];
             }
+
+            if (!where || where.length === 0) {
+              const result = await repository
+                .createQueryBuilder()
+                .update(repository.target)
+                .set(entityData)
+                .where("1=1")
+                .execute();
+              return result.affected || 0;
+            }
+
             const result = await repository.update(findOptions, entityData);
             return result.affected || 0;
           } catch (error: unknown) {
@@ -785,10 +1324,43 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           if (!dataSource.isInitialized) {
             await dataSource.initialize();
           }
+
           const repositoryName = getModelName(model);
-          const repository = dataSource.getRepository(repositoryName);
+          const deleteManyFields = where?.map((w) => w.field) || [];
+          const repository = tryGetRepository(
+            dataSource,
+            repositoryName,
+            deleteManyFields.length ? deleteManyFields : undefined,
+          );
+
+          if (!repository) {
+            try {
+              return await rawDeleteMany(model, where);
+            } catch (error: unknown) {
+              throw new BetterAuthError(
+                `Failed to delete many ${model}: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
 
           try {
+            if (!where || where.length === 0) {
+              const result = options?.softDeleteEnabledEntities?.includes(repositoryName)
+                ? await repository
+                    .createQueryBuilder()
+                    .softDelete()
+                    .from(repository.target)
+                    .where("1=1")
+                    .execute()
+                : await repository
+                    .createQueryBuilder()
+                    .delete()
+                    .from(repository.target)
+                    .where("1=1")
+                    .execute();
+              return result.affected || 0;
+            }
+
             const findOptionsArr = convertWhereToFindOptions(model, "deleteMany", where);
             const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
             const result = await deleteOrSoftDeleteHandler(repository, findOptions, repositoryName);
