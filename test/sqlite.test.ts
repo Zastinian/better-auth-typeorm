@@ -519,7 +519,7 @@ describe("Two Factor Plugin", () => {
 
 describe("Schema Generation (createSchema)", () => {
   test("should run generate cli without errors", async () => {
-    const proc = spawn(["bunx", "@better-auth/cli", "generate", "--config", "sqlite.ts", "-y"], {
+    const proc = spawn(["bunx", "auth", "generate", "--config", "sqlite.ts", "-y"], {
       cwd: __dirname,
       stdout: "pipe",
       stderr: "pipe",
