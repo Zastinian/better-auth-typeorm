@@ -35,9 +35,9 @@ npm install @hedystia/better-auth-typeorm typeorm
 Before you can use the adapter, you need to generate the necessary entities and migrations for your database. You can do this using the Better Auth CLI:
 
 ```bash
-bunx @better-auth/cli generate
+bunx auth generate
 # or
-npx @better-auth/cli generate
+npx auth generate
 ```
 
 This command will create the `typeorm/entities` and `typeorm/migrations` directories in your project.
