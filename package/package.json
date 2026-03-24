@@ -1,5 +1,6 @@
 {
   "name": "@hedystia/better-auth-typeorm",
+  "description": "TypeORM adapter for Better Auth",
   "version": "0.7.1",
   "repository": {
     "type": "git",
