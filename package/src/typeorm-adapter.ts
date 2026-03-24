@@ -191,7 +191,9 @@ function generateEntity(
 
   const imports = [`import { ${Array.from(typeormImports).sort().join(", ")} } from 'typeorm';`];
   for (const referencedModel of Array.from(referencedModels).sort()) {
-    imports.push(`import { ${toPascalCase(referencedModel)} } from './${toPascalCase(referencedModel)}';`);
+    imports.push(
+      `import { ${toPascalCase(referencedModel)} } from './${toPascalCase(referencedModel)}';`,
+    );
   }
   imports.push("");
   let entityCode = `@Entity('${tableName}')\nexport class ${className} {\n`;
@@ -366,7 +368,11 @@ function generateMigration(
         migrationCode += `      name: '${field.fieldName || name}',\n`;
         migrationCode += `      type: '${typeInfo.type}',\n`;
         migrationCode += `      isNullable: ${!field.required},\n`;
-        if (field.unique || (field.fieldName || name) === "email" || (field.fieldName || name) === "token") {
+        if (
+          field.unique ||
+          (field.fieldName || name) === "email" ||
+          (field.fieldName || name) === "token"
+        ) {
           migrationCode += "      isUnique: true,\n";
         }
         const defaultValue = formatDefaultValueForMigration(field);
@@ -398,7 +404,11 @@ function generateMigration(
         migrationCode += `      name: '${field.fieldName || name}',\n`;
         migrationCode += `      type: '${typeInfo.type}',\n`;
         migrationCode += `      isNullable: ${!field.required},\n`;
-        if (field.unique || (field.fieldName || name) === "email" || (field.fieldName || name) === "token") {
+        if (
+          field.unique ||
+          (field.fieldName || name) === "email" ||
+          (field.fieldName || name) === "token"
+        ) {
           migrationCode += "      isUnique: true,\n";
         }
         const defaultValue = formatDefaultValueForMigration(field);
