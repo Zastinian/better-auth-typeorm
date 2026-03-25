@@ -562,9 +562,9 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
       usePlural: options?.usePlural ?? false,
       debugLogs: options?.debugLogs ?? false,
       supportsJSON: false,
-      supportsDates: true,
-      supportsBooleans: true,
-      supportsNumericIds: true,
+      supportsDates: false,
+      supportsBooleans: false,
+      supportsNumericIds: false,
     },
     adapter: ({
       getModelName,
@@ -574,6 +574,8 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
       transformOutput,
       transformWhereClause,
     }) => {
+      const fieldMapCache: Record<string, Record<string, string>> = {};
+
       function convertWhereToFindOptions(
         model: string,
         action:
@@ -656,7 +658,12 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         for (let i = 0; i < cleaned.length; i++) {
           const w = cleaned[i];
           const prefix = i === 0 ? "" : ` ${w.connector ?? "AND"} `;
-          const col = escapeId(dataSource, w.field);
+          let mappedFieldName = getFieldName({ model, field: w.field });
+
+          if (fieldMapCache[model]?.[w.field]) {
+            mappedFieldName = fieldMapCache[model][w.field];
+          }
+          const col = escapeId(dataSource, mappedFieldName);
 
           const push = (value: unknown) => {
             params.push(value);
@@ -726,39 +733,138 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
       async function rawCreate(model: string, data: Record<string, unknown>, select?: string[]) {
         const defaultModelName = getDefaultModelName(model);
         const tableName = getModelName(model);
-        const transformed = await transformInput(
-          data,
-          defaultModelName,
-          "create",
-          data.forceAllowId as boolean,
-        );
 
-        await ensureTableExists(dataSource, tableName, transformed);
+        const queryRunner = dataSource.createQueryRunner();
+        await queryRunner.connect();
 
-        const entries = Object.entries(transformed).filter(([, value]) => value !== undefined);
+        let existingColumns: Set<string> | null = null;
+        try {
+          const table = await queryRunner.getTable(tableName);
+          if (table) {
+            existingColumns = new Set(table.columns.map((col) => col.name));
+          }
+        } catch {}
+
+        const createFieldMap: Record<string, string> = {};
+        for (const [key] of Object.entries(data)) {
+          if (existingColumns?.has(key)) {
+            createFieldMap[key] = key;
+          } else {
+            let found = false;
+            const variants = [
+              key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase()),
+              key.replace(/([A-Z])/g, "_$1").toLowerCase(),
+            ];
+            for (const variant of variants) {
+              if (existingColumns?.has(variant)) {
+                createFieldMap[key] = variant;
+                found = true;
+                break;
+              }
+            }
+            if (!found && existingColumns) {
+              for (const col of Array.from(existingColumns)) {
+                if (
+                  key.toLowerCase().includes(col.toLowerCase()) ||
+                  col.toLowerCase().includes(key.toLowerCase())
+                ) {
+                  const keyLower = key.toLowerCase().replace(/_/g, "");
+                  const colLower = col.toLowerCase().replace(/_/g, "");
+                  if (col.length < key.length && keyLower.startsWith(colLower)) {
+                    createFieldMap[key] = col;
+                    found = true;
+                    break;
+                  }
+                }
+              }
+            }
+            if (!found) {
+              const dbFieldName = getFieldName({ model, field: key });
+              if (existingColumns?.has(dbFieldName)) {
+                createFieldMap[key] = dbFieldName;
+              } else if (!existingColumns) {
+                createFieldMap[key] = dbFieldName || key;
+              }
+            }
+          }
+        }
+
+        const mappedData: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(data)) {
+          if (value === undefined) {
+            continue;
+          }
+          const targetKey = createFieldMap[key] || key;
+          mappedData[targetKey] = value;
+        }
+
+        if (!fieldMapCache[model]) {
+          fieldMapCache[model] = createFieldMap;
+        }
+
+        await ensureTableExists(dataSource, tableName, mappedData);
+
+        let updatedExistingColumns: Set<string> | null = null;
+        try {
+          const table = await queryRunner.getTable(tableName);
+          if (table) {
+            updatedExistingColumns = new Set(table.columns.map((col) => col.name));
+          }
+        } catch {}
+
+        const insertData: Record<string, unknown> = {};
+        if (updatedExistingColumns) {
+          for (const [key, value] of Object.entries(mappedData)) {
+            if (value === undefined) {
+              continue;
+            }
+            if (updatedExistingColumns.has(key)) {
+              insertData[key] = value;
+            }
+          }
+        } else {
+          Object.assign(insertData, mappedData);
+        }
+        const entries = Object.entries(insertData).filter(([, value]) => value !== undefined);
         const columns = entries.map(([key]) => escapeId(dataSource, key)).join(", ");
         const placeholders = entries.map(() => "?").join(", ");
         const values = entries.map(([, value]) =>
           value instanceof Date ? value.toISOString() : value,
         );
 
-        const queryRunner = dataSource.createQueryRunner();
-        await queryRunner.connect();
         try {
-          await queryRunner.query(
-            `INSERT INTO ${escapeId(dataSource, tableName)} (${columns}) VALUES (${placeholders})`,
-            values,
-          );
+          const isSqlite =
+            dataSource.options.type === "sqlite" || dataSource.options.type === "better-sqlite3";
+          if (isSqlite) {
+            await queryRunner.query("PRAGMA foreign_keys = OFF");
+          }
+          try {
+            const sql = `INSERT INTO ${escapeId(dataSource, tableName)} (${columns}) VALUES (${placeholders})`;
+            await queryRunner.query(sql, values);
+          } finally {
+            if (isSqlite) {
+              await queryRunner.query("PRAGMA foreign_keys = ON");
+            }
+          }
 
           const rows = await queryRunner.query(
             `SELECT * FROM ${escapeId(dataSource, tableName)} WHERE ${escapeId(dataSource, "id")} = ?`,
-            [transformed.id],
+            [mappedData.id],
           );
 
           if (rows[0]) {
-            return await transformOutput(rows[0], defaultModelName, select);
+            const reverseFieldMap: Record<string, string> = {};
+            for (const [originalKey, mappedKey] of Object.entries(createFieldMap)) {
+              reverseFieldMap[mappedKey] = originalKey;
+            }
+            const denormalizedRow: Record<string, unknown> = {};
+            for (const [key, value] of Object.entries(rows[0])) {
+              const originalKey = reverseFieldMap[key] || key;
+              denormalizedRow[originalKey] = value;
+            }
+            return await transformOutput(denormalizedRow, defaultModelName, select);
           }
-          return await transformOutput(transformed, defaultModelName, select);
+          return await transformOutput(mappedData, defaultModelName, select);
         } finally {
           await queryRunner.release();
         }
@@ -783,7 +889,18 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           if (!rows[0]) {
             return null;
           }
-          return (await transformOutput(rows[0], defaultModelName, select)) as T;
+          const reverseFieldMap: Record<string, string> = {};
+          if (fieldMapCache[model]) {
+            for (const [originalKey, mappedKey] of Object.entries(fieldMapCache[model])) {
+              reverseFieldMap[mappedKey] = originalKey;
+            }
+          }
+          const denormalizedRow: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries(rows[0])) {
+            const originalKey = reverseFieldMap[key] || key;
+            denormalizedRow[originalKey] = value;
+          }
+          return (await transformOutput(denormalizedRow, defaultModelName, select)) as T;
         } finally {
           await queryRunner.release();
         }
@@ -803,7 +920,11 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         let query = `SELECT * FROM ${escapeId(dataSource, tableName)}${sql}`;
 
         if (sortBy?.field) {
-          query += ` ORDER BY ${escapeId(dataSource, sortBy.field)} ${sortBy.direction === "desc" ? "DESC" : "ASC"}`;
+          let mappedSortField = getFieldName({ model, field: sortBy.field });
+          if (fieldMapCache[model]?.[sortBy.field]) {
+            mappedSortField = fieldMapCache[model][sortBy.field];
+          }
+          query += ` ORDER BY ${escapeId(dataSource, mappedSortField)} ${sortBy.direction === "desc" ? "DESC" : "ASC"}`;
         }
         query += ` LIMIT ${limit || 100}`;
         if (offset) {
@@ -814,8 +935,21 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         await queryRunner.connect();
         try {
           const rows = await queryRunner.query(query, params);
+          const reverseFieldMap: Record<string, string> = {};
+          if (fieldMapCache[model]) {
+            for (const [originalKey, mappedKey] of Object.entries(fieldMapCache[model])) {
+              reverseFieldMap[mappedKey] = originalKey;
+            }
+          }
           const transformed = await Promise.all(
-            rows.map((r: Record<string, unknown>) => transformOutput(r, defaultModelName)),
+            rows.map((r: Record<string, unknown>) => {
+              const denormalizedRow: Record<string, unknown> = {};
+              for (const [key, value] of Object.entries(r)) {
+                const originalKey = reverseFieldMap[key] || key;
+                denormalizedRow[originalKey] = value;
+              }
+              return transformOutput(denormalizedRow, defaultModelName);
+            }),
           );
           return transformed as T[];
         } finally {
@@ -826,7 +960,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
       async function rawUpdate(model: string, where: Where[], update: Record<string, unknown>) {
         const defaultModelName = getDefaultModelName(model);
         const tableName = getModelName(model);
-        const transformed = await transformInput(update, defaultModelName, "update");
+        const transformed = update;
 
         const { sql: whereSql, params: whereParams } = buildWhereSql(model, "findOne", where);
 
@@ -961,46 +1095,8 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           if (!dataSource.isInitialized) {
             await dataSource.initialize();
           }
-
-          const repositoryName = getModelName(model);
-          const dataFields = Object.keys(data as object);
-          const repository = tryGetRepository(dataSource, repositoryName, dataFields);
-
-          if (!repository) {
-            try {
-              return (await rawCreate(
-                model,
-                data as Record<string, unknown>,
-                select,
-              )) as typeof data;
-            } catch (error: unknown) {
-              throw new BetterAuthError(
-                `Failed to create ${model}: ${error instanceof Error ? error.message : String(error)}`,
-              );
-            }
-          }
-
-          const defaultModelName = getDefaultModelName(model);
-          const transformed = await transformInput(
-            data,
-            defaultModelName,
-            "create",
-            data.forceAllowId,
-          );
-
           try {
-            const entityData: Record<string, unknown> = {};
-            for (const key of Object.keys(data as object)) {
-              const dbField = getFieldName({ model, field: key });
-              entityData[key] = transformed[dbField] ?? data[key];
-            }
-            if (!entityData.id && transformed.id) {
-              entityData.id = transformed.id;
-            }
-            const entity = repository.create(entityData);
-            const result = await repository.save(entity);
-            const output = await transformOutput(result, defaultModelName, select);
-            return output as typeof data;
+            return (await rawCreate(model, data as Record<string, unknown>, select)) as typeof data;
           } catch (error: unknown) {
             throw new BetterAuthError(
               `Failed to create ${model}: ${error instanceof Error ? error.message : String(error)}`,
@@ -1012,58 +1108,12 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           if (!dataSource.isInitialized) {
             await dataSource.initialize();
           }
-
-          const repositoryName = getModelName(model);
-          const updateFields = [...where.map((w) => w.field), ...Object.keys(update as object)];
-          const repository = tryGetRepository(dataSource, repositoryName, updateFields);
-
-          if (!repository) {
-            try {
-              return (await rawUpdate(
-                model,
-                where,
-                update as Record<string, unknown>,
-              )) as typeof update;
-            } catch (error: unknown) {
-              throw new BetterAuthError(
-                `Failed to update ${model}: ${error instanceof Error ? error.message : String(error)}`,
-              );
-            }
-          }
-
-          const defaultModelName = getDefaultModelName(model);
-
           try {
-            const findOptionsArr = convertWhereToFindOptions(model, "update", where);
-            const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
-            const transformed = await transformInput(
+            return (await rawUpdate(
+              model,
+              where,
               update as Record<string, unknown>,
-              defaultModelName,
-              "update",
-            );
-
-            const existing = await repository.findOne({
-              where: findOptions,
-            });
-
-            if (!existing) {
-              return null;
-            }
-
-            const entityData: Record<string, unknown> = {};
-            for (const key of Object.keys(update as object)) {
-              const dbField = getFieldName({ model, field: key });
-              entityData[key] = transformed[dbField] ?? (update as Record<string, unknown>)[key];
-            }
-            await repository.update({ id: existing.id }, entityData);
-            const result = await repository.findOne({
-              where: { id: existing.id },
-            });
-            if (result) {
-              const output = await transformOutput(result, defaultModelName);
-              return output as typeof update;
-            }
-            return null;
+            )) as typeof update;
           } catch (error: unknown) {
             throw new BetterAuthError(
               `Failed to update ${model}: ${error instanceof Error ? error.message : String(error)}`,
@@ -1077,16 +1127,13 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           }
 
           const repositoryName = getModelName(model);
-          const deleteFields = where.map((w) => w.field);
-          const repository = tryGetRepository(
-            dataSource,
-            repositoryName,
-            deleteFields.length ? deleteFields : undefined,
-          );
+          const repository = tryGetRepository(dataSource, repositoryName);
 
-          if (!repository) {
+          if (repository && options?.softDeleteEnabledEntities?.includes(repositoryName)) {
             try {
-              await rawDelete(model, where);
+              const findOptionsArr = convertWhereToFindOptions(model, "delete", where);
+              const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
+              await deleteOrSoftDeleteHandler(repository, findOptions, repositoryName);
               return;
             } catch (error: unknown) {
               throw new BetterAuthError(
@@ -1096,9 +1143,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           }
 
           try {
-            const findOptionsArr = convertWhereToFindOptions(model, "delete", where);
-            const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
-            await deleteOrSoftDeleteHandler(repository, findOptions, repositoryName);
+            await rawDelete(model, where);
           } catch (error: unknown) {
             throw new BetterAuthError(
               `Failed to delete ${model}: ${error instanceof Error ? error.message : String(error)}`,
@@ -1118,38 +1163,8 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           if (!dataSource.isInitialized) {
             await dataSource.initialize();
           }
-
-          const repositoryName = getModelName(model);
-          const findFields = [...where.map((w) => w.field), ...(select || [])];
-          const repository = tryGetRepository(
-            dataSource,
-            repositoryName,
-            findFields.length ? findFields : undefined,
-          );
-
-          if (!repository) {
-            try {
-              return await rawFindOne<T>(model, where, select);
-            } catch (error: unknown) {
-              throw new BetterAuthError(
-                `Failed to find ${model}: ${error instanceof Error ? error.message : String(error)}`,
-              );
-            }
-          }
-
-          const defaultModelName = getDefaultModelName(model);
-
           try {
-            const findOptions = convertWhereToFindOptions(model, "findOne", where);
-            const result = await repository.findOne({
-              where: findOptions,
-              select: select,
-            });
-            if (result) {
-              const output = await transformOutput(result, defaultModelName, select);
-              return output as T;
-            }
-            return null;
+            return await rawFindOne<T>(model, where, select);
           } catch (error: unknown) {
             throw new BetterAuthError(
               `Failed to find ${model}: ${error instanceof Error ? error.message : String(error)}`,
@@ -1178,48 +1193,8 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           if (!dataSource.isInitialized) {
             await dataSource.initialize();
           }
-
-          const repositoryName = getModelName(model);
-          const findManyFields = [
-            ...(where?.map((w) => w.field) || []),
-            ...(sortBy?.field ? [sortBy.field] : []),
-          ];
-          const repository = tryGetRepository(
-            dataSource,
-            repositoryName,
-            findManyFields.length ? findManyFields : undefined,
-          );
-
-          if (!repository) {
-            try {
-              return await rawFindMany<T>(model, where, limit, sortBy, offset);
-            } catch (error: unknown) {
-              throw new BetterAuthError(
-                `Failed to find many ${model}: ${error instanceof Error ? error.message : String(error)}`,
-              );
-            }
-          }
-
-          const defaultModelName = getDefaultModelName(model);
-
           try {
-            const findOptions = convertWhereToFindOptions(model, "findMany", where);
-
-            const result = await repository.find({
-              where: findOptions,
-              take: limit || 100,
-              skip: offset || 0,
-              order: sortBy?.field
-                ? {
-                    [sortBy.field]: sortBy.direction === "desc" ? "DESC" : "ASC",
-                  }
-                : undefined,
-            });
-
-            const transformed = await Promise.all(
-              result.map((r) => transformOutput(r, defaultModelName)),
-            );
-            return transformed as T[];
+            return await rawFindMany<T>(model, where, limit, sortBy, offset);
           } catch (error: unknown) {
             throw new BetterAuthError(
               `Failed to find many ${model}: ${error instanceof Error ? error.message : String(error)}`,
@@ -1231,29 +1206,8 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           if (!dataSource.isInitialized) {
             await dataSource.initialize();
           }
-
-          const repositoryName = getModelName(model);
-          const countFields = where?.map((w) => w.field) || [];
-          const repository = tryGetRepository(
-            dataSource,
-            repositoryName,
-            countFields.length ? countFields : undefined,
-          );
-
-          if (!repository) {
-            try {
-              return await rawCount(model, where);
-            } catch (error: unknown) {
-              throw new BetterAuthError(
-                `Failed to count ${model}: ${error instanceof Error ? error.message : String(error)}`,
-              );
-            }
-          }
-
           try {
-            const findOptions = convertWhereToFindOptions(model, "count", where);
-            const result = await repository.count({ where: findOptions });
-            return result;
+            return await rawCount(model, where);
           } catch (error: unknown) {
             throw new BetterAuthError(
               `Failed to count ${model}: ${error instanceof Error ? error.message : String(error)}`,
@@ -1265,54 +1219,8 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           if (!dataSource.isInitialized) {
             await dataSource.initialize();
           }
-
-          const repositoryName = getModelName(model);
-          const updateManyFields = [
-            ...(where?.map((w) => w.field) || []),
-            ...Object.keys(update as object),
-          ];
-          const repository = tryGetRepository(
-            dataSource,
-            repositoryName,
-            updateManyFields.length ? updateManyFields : undefined,
-          );
-
-          if (!repository) {
-            try {
-              return await rawUpdateMany(model, where, update as Record<string, unknown>);
-            } catch (error: unknown) {
-              throw new BetterAuthError(
-                `Failed to update many ${model}: ${error instanceof Error ? error.message : String(error)}`,
-              );
-            }
-          }
-
-          const defaultModelName = getDefaultModelName(model);
-
           try {
-            const findOptionsArr = convertWhereToFindOptions(model, "updateMany", where);
-            const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
-            const transformed = await transformInput(update, defaultModelName, "update");
-
-            const entityData: Record<string, unknown> = {};
-            const updateData = update as Record<string, unknown>;
-            for (const key of Object.keys(updateData)) {
-              const dbField = getFieldName({ model, field: key });
-              entityData[key] = transformed[dbField] ?? update[key];
-            }
-
-            if (!where || where.length === 0) {
-              const result = await repository
-                .createQueryBuilder()
-                .update(repository.target)
-                .set(entityData)
-                .where("1=1")
-                .execute();
-              return result.affected || 0;
-            }
-
-            const result = await repository.update(findOptions, entityData);
-            return result.affected || 0;
+            return await rawUpdateMany(model, where, update as Record<string, unknown>);
           } catch (error: unknown) {
             throw new BetterAuthError(
               `Failed to update many ${model}: ${error instanceof Error ? error.message : String(error)}`,
@@ -1326,16 +1234,27 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           }
 
           const repositoryName = getModelName(model);
-          const deleteManyFields = where?.map((w) => w.field) || [];
-          const repository = tryGetRepository(
-            dataSource,
-            repositoryName,
-            deleteManyFields.length ? deleteManyFields : undefined,
-          );
+          const repository = tryGetRepository(dataSource, repositoryName);
 
-          if (!repository) {
+          if (repository && options?.softDeleteEnabledEntities?.includes(repositoryName)) {
             try {
-              return await rawDeleteMany(model, where);
+              if (!where || where.length === 0) {
+                const result = await repository
+                  .createQueryBuilder()
+                  .softDelete()
+                  .from(repository.target)
+                  .where("1=1")
+                  .execute();
+                return result.affected || 0;
+              }
+              const findOptionsArr = convertWhereToFindOptions(model, "deleteMany", where);
+              const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
+              const result = await deleteOrSoftDeleteHandler(
+                repository,
+                findOptions,
+                repositoryName,
+              );
+              return result.affected || 0;
             } catch (error: unknown) {
               throw new BetterAuthError(
                 `Failed to delete many ${model}: ${error instanceof Error ? error.message : String(error)}`,
@@ -1344,27 +1263,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           }
 
           try {
-            if (!where || where.length === 0) {
-              const result = options?.softDeleteEnabledEntities?.includes(repositoryName)
-                ? await repository
-                    .createQueryBuilder()
-                    .softDelete()
-                    .from(repository.target)
-                    .where("1=1")
-                    .execute()
-                : await repository
-                    .createQueryBuilder()
-                    .delete()
-                    .from(repository.target)
-                    .where("1=1")
-                    .execute();
-              return result.affected || 0;
-            }
-
-            const findOptionsArr = convertWhereToFindOptions(model, "deleteMany", where);
-            const findOptions = findOptionsArr.length === 1 ? findOptionsArr[0] : findOptionsArr;
-            const result = await deleteOrSoftDeleteHandler(repository, findOptions, repositoryName);
-            return result.affected || 0;
+            return await rawDeleteMany(model, where);
           } catch (error: unknown) {
             throw new BetterAuthError(
               `Failed to delete many ${model}: ${error instanceof Error ? error.message : String(error)}`,
