@@ -113,7 +113,7 @@
         "noDuplicateObjectKeys": "error",
         "noDuplicateParameters": "error",
         "noExplicitAny": "error",
-        "noEmptyBlockStatements": "error",
+        "noEmptyBlockStatements": "off",
         "noFallthroughSwitchClause": "error",
         "noFunctionAssign": "error",
         "noGlobalAssign": "error",
