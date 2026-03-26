@@ -561,7 +561,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
       adapterName: "TypeORM",
       usePlural: options?.usePlural ?? false,
       debugLogs: options?.debugLogs ?? false,
-      supportsJSON: false,
+      supportsJSON: true,
       supportsDates: false,
       supportsBooleans: false,
       supportsNumericIds: false,
@@ -733,6 +733,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
       async function rawCreate(model: string, data: Record<string, unknown>, select?: string[]) {
         const defaultModelName = getDefaultModelName(model);
         const tableName = getModelName(model);
+        const transformedData = await transformInput(data, defaultModelName, "create");
 
         const queryRunner = dataSource.createQueryRunner();
         await queryRunner.connect();
@@ -790,7 +791,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         }
 
         const mappedData: Record<string, unknown> = {};
-        for (const [key, value] of Object.entries(data)) {
+        for (const [key, value] of Object.entries(transformedData)) {
           if (value === undefined) {
             continue;
           }
@@ -828,9 +829,15 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         const entries = Object.entries(insertData).filter(([, value]) => value !== undefined);
         const columns = entries.map(([key]) => escapeId(dataSource, key)).join(", ");
         const placeholders = entries.map(() => "?").join(", ");
-        const values = entries.map(([, value]) =>
-          value instanceof Date ? value.toISOString() : value,
-        );
+        const values = entries.map(([, value]) => {
+          if (value instanceof Date) {
+            return value.toISOString();
+          }
+          if (typeof value === "object" && value !== null) {
+            return JSON.stringify(value);
+          }
+          return value;
+        });
 
         try {
           const isSqlite =
@@ -860,6 +867,17 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
             const denormalizedRow: Record<string, unknown> = {};
             for (const [key, value] of Object.entries(rows[0])) {
               const originalKey = reverseFieldMap[key] || key;
+              if (typeof value === "string") {
+                try {
+                  if (
+                    (value.startsWith("{") && value.endsWith("}")) ||
+                    (value.startsWith("[") && value.endsWith("]"))
+                  ) {
+                    denormalizedRow[originalKey] = JSON.parse(value);
+                    continue;
+                  }
+                } catch {}
+              }
               denormalizedRow[originalKey] = value;
             }
             return await transformOutput(denormalizedRow, defaultModelName, select);
@@ -898,6 +916,17 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           const denormalizedRow: Record<string, unknown> = {};
           for (const [key, value] of Object.entries(rows[0])) {
             const originalKey = reverseFieldMap[key] || key;
+            if (typeof value === "string") {
+              try {
+                if (
+                  (value.startsWith("{") && value.endsWith("}")) ||
+                  (value.startsWith("[") && value.endsWith("]"))
+                ) {
+                  denormalizedRow[originalKey] = JSON.parse(value);
+                  continue;
+                }
+              } catch {}
+            }
             denormalizedRow[originalKey] = value;
           }
           return (await transformOutput(denormalizedRow, defaultModelName, select)) as T;
@@ -946,6 +975,17 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               const denormalizedRow: Record<string, unknown> = {};
               for (const [key, value] of Object.entries(r)) {
                 const originalKey = reverseFieldMap[key] || key;
+                if (typeof value === "string") {
+                  try {
+                    if (
+                      (value.startsWith("{") && value.endsWith("}")) ||
+                      (value.startsWith("[") && value.endsWith("]"))
+                    ) {
+                      denormalizedRow[originalKey] = JSON.parse(value);
+                      continue;
+                    }
+                  } catch {}
+                }
                 denormalizedRow[originalKey] = value;
               }
               return transformOutput(denormalizedRow, defaultModelName);
@@ -960,7 +1000,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
       async function rawUpdate(model: string, where: Where[], update: Record<string, unknown>) {
         const defaultModelName = getDefaultModelName(model);
         const tableName = getModelName(model);
-        const transformed = update;
+        const transformed = await transformInput(update, defaultModelName, "update");
 
         const { sql: whereSql, params: whereParams } = buildWhereSql(model, "findOne", where);
 
@@ -981,7 +1021,13 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           for (const [key, value] of Object.entries(transformed)) {
             if (value !== undefined) {
               setClauses.push(`${escapeId(dataSource, key)} = ?`);
-              setValues.push(value instanceof Date ? value.toISOString() : value);
+              if (value instanceof Date) {
+                setValues.push(value.toISOString());
+              } else if (typeof value === "object" && value !== null) {
+                setValues.push(JSON.stringify(value));
+              } else {
+                setValues.push(value);
+              }
             }
           }
 
@@ -998,7 +1044,22 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           );
 
           if (result[0]) {
-            return await transformOutput(result[0], defaultModelName);
+            const denormalizedRow: Record<string, unknown> = {};
+            for (const [key, value] of Object.entries(result[0])) {
+              if (typeof value === "string") {
+                try {
+                  if (
+                    (value.startsWith("{") && value.endsWith("}")) ||
+                    (value.startsWith("[") && value.endsWith("]"))
+                  ) {
+                    denormalizedRow[key] = JSON.parse(value);
+                    continue;
+                  }
+                } catch {}
+              }
+              denormalizedRow[key] = value;
+            }
+            return await transformOutput(denormalizedRow, defaultModelName);
           }
           return null;
         } finally {
@@ -1052,7 +1113,13 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         for (const [key, value] of Object.entries(transformed)) {
           if (value !== undefined) {
             setClauses.push(`${escapeId(dataSource, key)} = ?`);
-            setValues.push(value instanceof Date ? value.toISOString() : value);
+            if (value instanceof Date) {
+              setValues.push(value.toISOString());
+            } else if (typeof value === "object" && value !== null) {
+              setValues.push(JSON.stringify(value));
+            } else {
+              setValues.push(value);
+            }
           }
         }
 
