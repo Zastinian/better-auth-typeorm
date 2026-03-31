@@ -1145,22 +1145,12 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         const queryRunner = dataSource.createQueryRunner();
         await queryRunner.connect();
         try {
-          const result = await (
-            queryRunner as typeof queryRunner & {
-              query(query: string, parameters?: unknown[], useStructuredResult?: boolean): Promise<{
-                affected?: number;
-                changes?: number;
-              }>;
-            }
-          ).query(
+          const result = await queryRunner.query(
             `UPDATE ${escapeId(dataSource, tableName)} SET ${setClauses.join(", ")}${whereSql}`,
             [...setValues, ...whereParams],
             true,
           );
-          if (typeof result?.affected === "number") {
-            return result.affected;
-          }
-          return typeof result?.changes === "number" ? result.changes : 0;
+          return getAffectedRowCount(result);
         } finally {
           await queryRunner.release();
         }
@@ -1173,25 +1163,24 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         const queryRunner = dataSource.createQueryRunner();
         await queryRunner.connect();
         try {
-          const result = await (
-            queryRunner as typeof queryRunner & {
-              query(query: string, parameters?: unknown[], useStructuredResult?: boolean): Promise<{
-                affected?: number;
-                changes?: number;
-              }>;
-            }
-          ).query(
+          const result = await queryRunner.query(
             `DELETE FROM ${escapeId(dataSource, tableName)}${sql}`,
             params,
             true,
           );
-          if (typeof result?.affected === "number") {
-            return result.affected;
-          }
-          return typeof result?.changes === "number" ? result.changes : 0;
+          return getAffectedRowCount(result);
         } finally {
           await queryRunner.release();
         }
+      }
+
+      function getAffectedRowCount(result: { affected?: number } & Record<string, unknown>): number {
+        if (typeof result.affected === "number") {
+          return result.affected;
+        }
+
+        const changes = result["changes"];
+        return typeof changes === "number" ? changes : 0;
       }
 
       return {
