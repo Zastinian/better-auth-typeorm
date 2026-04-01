@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.3.11/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.4.10/schema.json",
   "vcs": {
     "enabled": false,
     "clientKind": "git",
@@ -20,31 +20,14 @@
       "**",
       "!**/pnpm-lock.yaml",
       "!**/package-lock.json",
-      "!**/bun.lockb",
+      "!**/bun.lock",
       "!**/yarn.lock",
       "!**/node_modules/",
       "!**/dist/",
       "!**/.vscode/extensions.json",
-      "!**/src/client/types/ClientEvents.d.ts"
+      "!**/typeorm/"
     ]
   },
-  "overrides": [
-    {
-      "includes": ["**/*.svelte", "**/*.astro", "**/*.vue"],
-      "linter": {
-        "rules": {
-          "style": {
-            "useConst": "error",
-            "useImportType": "error"
-          },
-          "correctness": {
-            "noUnusedVariables": "error",
-            "noUnusedImports": "error"
-          }
-        }
-      }
-    }
-  ],
   "linter": {
     "enabled": true,
     "rules": {
