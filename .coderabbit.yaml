@@ -144,6 +144,8 @@ reviews:
   tools:
     biome:
       enabled: true
+    github-checks:
+      enabled: true
 
   finishing_touches:
     docstrings:
