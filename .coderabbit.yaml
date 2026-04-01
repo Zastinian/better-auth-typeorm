@@ -37,14 +37,9 @@ reviews:
     base_branches:
       - master
   path_filters:
-    - "!**/pnpm-lock.yaml"
-    - "!**/package-lock.json"
-    - "!**/bun.lockb"
-    - "!**/yarn.lock"
     - "!**/node_modules/**"
     - "!**/dist/**"
     - "!**/.vscode/extensions.json"
-    - "!**/src/client/types/ClientEvents.d.ts"
   path_instructions:
     - path: "*"
       instructions:
