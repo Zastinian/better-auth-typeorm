@@ -1,0 +1,221 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# https://docs.coderabbit.ai/guides/customize-coderabbit
+
+language: "en-US"
+early_access: true
+tone_instructions: "Provide clear, professional explanations that help developers understand what needs improvement and why. Avoid generic AI prompts or nitpicky labels. Focus on actionable feedback with reasoning."
+
+reviews:
+  request_changes_workflow: true
+  high_level_summary: true
+  high_level_summary_placeholder: " @coderabbitai summary"
+  auto_title_placeholder: " @coderabbitai"
+  poem: false
+  review_status: true
+  review_details: false
+  commit_status: true
+  collapse_walkthrough: false
+  changed_files_summary: true
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  suggested_labels: true
+  auto_apply_labels: true
+  suggested_reviewers: true
+  auto_assign_reviewers: false
+  in_progress_fortune: true
+  enable_prompt_for_ai_agents: false
+  auto_review:
+    enabled: true
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+      - "SWEEP"
+    drafts: false
+    base_branches:
+      - master
+  path_filters:
+    - "!**/pnpm-lock.yaml"
+    - "!**/package-lock.json"
+    - "!**/bun.lockb"
+    - "!**/yarn.lock"
+    - "!**/node_modules/**"
+    - "!**/dist/**"
+    - "!**/.vscode/extensions.json"
+    - "!**/src/client/types/ClientEvents.d.ts"
+  path_instructions:
+    - path: "*"
+      instructions:
+        "All character sets must be UTF-8.
+        Lines must end with LF (line feed).
+        Use spaces for indentation instead of tabs.
+        Insert a newline at the end of each file.
+        Trim all trailing whitespaces.
+        Maximum line length is 100 characters.
+        Avoid blank lines in code.
+        Do not maintain indents on empty lines.
+        Add spaces after commas.
+        Add spaces around all operators.
+        Do not add space before comma.
+        Handle leftover TODOs in code.
+        console.log statements are allowed."
+
+    - path: "**/*.ts"
+      instructions:
+        "Use 2 spaces for indentation in TypeScript files.
+        Use semicolons always.
+        Use double quotes for strings.
+        Use 'as' for type casting (prefer 'as Type' over angle bracket syntax).
+        Always use parentheses for arrow functions, even with single parameters.
+        Use bracketSpacing: true (add spaces inside object braces).
+        Use bracketSameLine: false (do not place closing bracket on same line as last element).
+        Use 'import type' instead of 'import' for type-only imports.
+        Organize imports (sort and group them).
+        Avoid using 'any' type - use 'unknown' for truly unknown types and add type guards.
+        Use explicit types for variables, function parameters, and return types.
+        Use PascalCase for class names and type names.
+        Use camelCase for functions and variables.
+        Enforce Single Responsibility Principle - each function should do one thing.
+        Keep functions short (10-20 lines max) with limited parameters (3-4 max).
+        Use early exits for invalid inputs.
+        Avoid side effects - functions should be pure when possible.
+        Use descriptive variable names.
+        Handle errors with try/catch blocks or proper error returns.
+        Decompose complex functions into smaller ones.
+        Extract repeated code into new functions.
+        Use braces for all 'if' and 'for' statements.
+        Use 'const' instead of 'let' when variables are not reassigned.
+        Avoid useless else blocks after early returns.
+        Avoid 'var' - use 'let' or 'const' instead.
+        Use template literals instead of string concatenation.
+        Use optional chaining and nullish coalescing when appropriate.
+        Avoid unnecessary ternary expressions.
+        Use literal keys instead of quoted keys when possible.
+        Avoid useless constructors, renames, or type casts.
+        Avoid void type - use undefined or never instead.
+        Avoid comma operator.
+        Use regex literals instead of RegExp constructor.
+        Avoid comparing with 0 using loose equality.
+        Avoid double equals - use strict equality (=== and !==).
+        Avoid duplicate case clauses, class members, object keys, and parameters.
+        Avoid assigning to function parameters.
+        Avoid catch/prototype/class/global assignments.
+        Avoid misleading regex character classes.
+        Avoid redeclaring variables.
+        Avoid self-compare and shadow restricted names.
+        Avoid unsafe negation.
+        Avoid with statements.
+        Avoid global eval for security.
+        Use isNaN() instead of direct NaN comparison.
+        Use valid typeof expressions.
+        Avoid constant conditions and precision loss.
+        Avoid unreachable code and super calls.
+        Avoid unsafe finally blocks.
+        Avoid unused variables and imports.
+        Avoid empty patterns and character classes in regex.
+        Avoid global object calls and invalid constructor super.
+        Avoid invalid use before declaration.
+        Avoid invalid builtin instantiation.
+        Avoid switch case declarations.
+        Avoid fallthrough switch clauses without comments.
+        Avoid confusing labels.
+        Avoid control characters in regex.
+        Avoid adjacent spaces in regex.
+        Avoid extra boolean casts.
+        Avoid useless catch, lone block statements, and template literals.
+        Avoid inferrable types (let x: number = 0 -> let x = 0).
+        Avoid number namespace usage.
+        Avoid parameter reassignment.
+        Use default parameters last.
+        Use enum initializers.
+        Use self-closing elements for JSX.
+        Use single var declarator per statement.
+        Use block statements for control flow.
+        Use default switch clause last.
+        Use Node.js import protocol when needed (node: prefix)."
+
+    - path: "**/*.json"
+      instructions:
+        "Use 2 spaces for indentation in JSON files.
+        Split array items across multiple lines.
+        Split object properties across multiple lines.
+        Remove trailing commas.
+        Do not align properties.
+        Add space after colon and comma.
+        Do not add space before colon or comma."
+
+  tools:
+    biome:
+      enabled: true
+
+  finishing_touches:
+    docstrings:
+      enabled: true
+    unit_tests:
+      enabled: true
+    autofix:
+      enabled: true
+
+  pre_merge_checks:
+    enabled: true
+
+chat:
+  auto_reply: true
+  art: false
+  allow_non_org_members: true
+
+knowledge_base:
+  opt_out: false
+  web_search:
+    enabled: true
+  code_guidelines:
+    enabled: true
+  learnings:
+    scope: "local"
+  issues:
+    scope: "local"
+  pull_requests:
+    scope: "local"
+  mcp:
+    usage: "auto"
+
+issue_enrichment:
+  auto_enrich:
+    enabled: true
+  planning:
+    enabled: true
+    auto_planning:
+      enabled: true
+      labels:
+        - "feature"
+        - "enhancement"
+        - "bug"
+  labeling:
+    labeling_instructions:
+      - label: "bug"
+        instructions: "Something isn't working."
+      - label: "documentation"
+        instructions: "Improvements or additions to documentation."
+      - label: "duplicate"
+        instructions: "This issue or pull request already exists."
+      - label: "enhancement"
+        instructions: "New feature or request."
+      - label: "good first issue"
+        instructions: "Good for newcomers."
+      - label: "help wanted"
+        instructions: "Extra attention is needed."
+      - label: "invalid"
+        instructions: "This doesn't seem right."
+      - label: "question"
+        instructions: "Further information is requested."
+      - label: "wontfix"
+        instructions: "This will not be worked on."
+    auto_apply_labels: true
+
+code_generation:
+  docstrings:
+    path_instructions: []
+  unit_tests:
+    path_instructions: []
