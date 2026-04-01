@@ -15,6 +15,7 @@ import {
   MoreThanOrEqual,
   Not,
   type ObjectLiteral,
+  type QueryResult,
   type Repository,
   type UpdateResult,
 } from "typeorm";
@@ -691,7 +692,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           const col = escapeId(dataSource, mappedFieldName);
 
           const push = (value: unknown) => {
-            return pushParameter(dataSource, params, value, startIndex);
+            return pushParameter(dataSource, params, normalizeQueryValue(value), startIndex);
           };
 
           switch (w.operator ?? "eq") {
@@ -1174,13 +1175,12 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         }
       }
 
-      function getAffectedRowCount(result: { affected?: number } & Record<string, unknown>): number {
+      function getAffectedRowCount(result: QueryResult): number {
         if (typeof result.affected === "number") {
           return result.affected;
         }
 
-        const changes = result["changes"];
-        return typeof changes === "number" ? changes : 0;
+        return 0;
       }
 
       return {
