@@ -1,7 +1,7 @@
 {
   "devDependencies": {
     "@biomejs/biome": "2.4.10",
-    "@types/bun": "^1.3.10"
+    "@types/bun": "^1.3.13"
   },
   "scripts": {
     "build": "bun run --filter '*' build",
