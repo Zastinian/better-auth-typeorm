@@ -697,10 +697,18 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
 
           switch (w.operator ?? "eq") {
             case "eq":
-              parts.push(`${prefix}${col} = ${push(w.value)}`);
+              if (w.value === null) {
+                parts.push(`${prefix}${col} IS NULL`);
+              } else {
+                parts.push(`${prefix}${col} = ${push(w.value)}`);
+              }
               break;
             case "ne":
-              parts.push(`${prefix}${col} <> ${push(w.value)}`);
+              if (w.value === null) {
+                parts.push(`${prefix}${col} IS NOT NULL`);
+              } else {
+                parts.push(`${prefix}${col} <> ${push(w.value)}`);
+              }
               break;
             case "lt":
               parts.push(`${prefix}${col} < ${push(w.value)}`);
