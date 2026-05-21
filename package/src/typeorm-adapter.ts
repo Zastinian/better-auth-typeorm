@@ -565,6 +565,7 @@ export interface TypeormAdapterOptions {
   usePlural?: boolean;
   debugLogs?: boolean;
   softDeleteEnabledEntities?: string[];
+  enableSchemaSync?: boolean;
 }
 
 function createSchemaGenerationDataSource(dataSource: DataSource): DataSource {
@@ -592,6 +593,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
       supportsNumericIds: false,
     },
     adapter: ({
+      schema,
       getModelName,
       getDefaultModelName,
       getFieldName,
@@ -600,6 +602,47 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
       transformWhereClause,
     }) => {
       const fieldMapCache: Record<string, Record<string, string>> = {};
+
+      function isJsonTypedField(defaultModelName: string, fieldKey: string): boolean {
+        const fieldType = schema?.[defaultModelName]?.fields?.[fieldKey]?.type;
+        if (!fieldType) {
+          return false;
+        }
+        if (Array.isArray(fieldType)) {
+          return false;
+        }
+        return fieldType === "json" || fieldType === "string[]" || fieldType === "number[]";
+      }
+
+      function deserializeRow(
+        defaultModelName: string,
+        row: Record<string, unknown>,
+        reverseFieldMap: Record<string, string>,
+      ): Record<string, unknown> {
+        const denormalized: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(row)) {
+          const originalKey = reverseFieldMap[key] || key;
+          if (typeof value === "string" && isJsonTypedField(defaultModelName, originalKey)) {
+            try {
+              denormalized[originalKey] = JSON.parse(value);
+              continue;
+            } catch {}
+          }
+          denormalized[originalKey] = value;
+        }
+        return denormalized;
+      }
+
+      function buildReverseFieldMap(model: string): Record<string, string> {
+        const reverseFieldMap: Record<string, string> = {};
+        const cached = fieldMapCache[model];
+        if (cached) {
+          for (const [originalKey, mappedKey] of Object.entries(cached)) {
+            reverseFieldMap[mappedKey] = originalKey;
+          }
+        }
+        return reverseFieldMap;
+      }
 
       function convertWhereToFindOptions(
         model: string,
@@ -836,15 +879,17 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           fieldMapCache[model] = createFieldMap;
         }
 
-        await ensureTableExists(dataSource, tableName, mappedData);
-
-        let updatedExistingColumns: Set<string> | null = null;
-        try {
-          const table = await queryRunner.getTable(tableName);
-          if (table) {
-            updatedExistingColumns = new Set(table.columns.map((col) => col.name));
-          }
-        } catch {}
+        let updatedExistingColumns: Set<string> | null = existingColumns;
+        if (options?.enableSchemaSync) {
+          await ensureTableExists(dataSource, tableName, mappedData);
+          updatedExistingColumns = null;
+          try {
+            const table = await queryRunner.getTable(tableName);
+            if (table) {
+              updatedExistingColumns = new Set(table.columns.map((col) => col.name));
+            }
+          } catch {}
+        }
 
         const insertData: Record<string, unknown> = {};
         if (updatedExistingColumns) {
@@ -891,22 +936,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
             for (const [originalKey, mappedKey] of Object.entries(createFieldMap)) {
               reverseFieldMap[mappedKey] = originalKey;
             }
-            const denormalizedRow: Record<string, unknown> = {};
-            for (const [key, value] of Object.entries(rows[0])) {
-              const originalKey = reverseFieldMap[key] || key;
-              if (typeof value === "string") {
-                try {
-                  if (
-                    (value.startsWith("{") && value.endsWith("}")) ||
-                    (value.startsWith("[") && value.endsWith("]"))
-                  ) {
-                    denormalizedRow[originalKey] = JSON.parse(value);
-                    continue;
-                  }
-                } catch {}
-              }
-              denormalizedRow[originalKey] = value;
-            }
+            const denormalizedRow = deserializeRow(defaultModelName, rows[0], reverseFieldMap);
             return await transformOutput(denormalizedRow, defaultModelName, select);
           }
           return await transformOutput(mappedData, defaultModelName, select);
@@ -934,28 +964,8 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           if (!rows[0]) {
             return null;
           }
-          const reverseFieldMap: Record<string, string> = {};
-          if (fieldMapCache[model]) {
-            for (const [originalKey, mappedKey] of Object.entries(fieldMapCache[model])) {
-              reverseFieldMap[mappedKey] = originalKey;
-            }
-          }
-          const denormalizedRow: Record<string, unknown> = {};
-          for (const [key, value] of Object.entries(rows[0])) {
-            const originalKey = reverseFieldMap[key] || key;
-            if (typeof value === "string") {
-              try {
-                if (
-                  (value.startsWith("{") && value.endsWith("}")) ||
-                  (value.startsWith("[") && value.endsWith("]"))
-                ) {
-                  denormalizedRow[originalKey] = JSON.parse(value);
-                  continue;
-                }
-              } catch {}
-            }
-            denormalizedRow[originalKey] = value;
-          }
+          const reverseFieldMap = buildReverseFieldMap(model);
+          const denormalizedRow = deserializeRow(defaultModelName, rows[0], reverseFieldMap);
           return (await transformOutput(denormalizedRow, defaultModelName, select)) as T;
         } finally {
           await queryRunner.release();
@@ -991,30 +1001,10 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         await queryRunner.connect();
         try {
           const rows = await queryRunner.query(query, params);
-          const reverseFieldMap: Record<string, string> = {};
-          if (fieldMapCache[model]) {
-            for (const [originalKey, mappedKey] of Object.entries(fieldMapCache[model])) {
-              reverseFieldMap[mappedKey] = originalKey;
-            }
-          }
+          const reverseFieldMap = buildReverseFieldMap(model);
           const transformed = await Promise.all(
             rows.map((r: Record<string, unknown>) => {
-              const denormalizedRow: Record<string, unknown> = {};
-              for (const [key, value] of Object.entries(r)) {
-                const originalKey = reverseFieldMap[key] || key;
-                if (typeof value === "string") {
-                  try {
-                    if (
-                      (value.startsWith("{") && value.endsWith("}")) ||
-                      (value.startsWith("[") && value.endsWith("]"))
-                    ) {
-                      denormalizedRow[originalKey] = JSON.parse(value);
-                      continue;
-                    }
-                  } catch {}
-                }
-                denormalizedRow[originalKey] = value;
-              }
+              const denormalizedRow = deserializeRow(defaultModelName, r, reverseFieldMap);
               return transformOutput(denormalizedRow, defaultModelName);
             }),
           );
@@ -1067,21 +1057,8 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           );
 
           if (result[0]) {
-            const denormalizedRow: Record<string, unknown> = {};
-            for (const [key, value] of Object.entries(result[0])) {
-              if (typeof value === "string") {
-                try {
-                  if (
-                    (value.startsWith("{") && value.endsWith("}")) ||
-                    (value.startsWith("[") && value.endsWith("]"))
-                  ) {
-                    denormalizedRow[key] = JSON.parse(value);
-                    continue;
-                  }
-                } catch {}
-              }
-              denormalizedRow[key] = value;
-            }
+            const reverseFieldMap = buildReverseFieldMap(model);
+            const denormalizedRow = deserializeRow(defaultModelName, result[0], reverseFieldMap);
             return await transformOutput(denormalizedRow, defaultModelName);
           }
           return null;
