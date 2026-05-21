@@ -135,6 +135,28 @@ export const auth = betterAuth({
 - If you enable soft delete, you will need to add the `@DeleteDateColumn` decorator with column name `deletedAt` to your entities.
 - Entities that are not in the `softDeleteEnabledEntities` list will not use soft delete.
 
+### Runtime Schema Synchronization (opt-in)
+
+By default, the adapter will **not** issue any DDL (`CREATE TABLE` / `ALTER TABLE`) at runtime. Schema changes should live in deliberate, version-controlled migrations — generate them with `bunx auth generate` (or `npx auth generate`) and apply them with TypeORM's migration runner (`migrationsRun: true`).
+
+If you want the adapter to attempt to create missing tables / add missing columns automatically on every `create()` call — inferring types from the inserted values — you can opt in with `enableSchemaSync`:
+
+```typescript
+import { typeormAdapter } from "@hedystia/better-auth-typeorm";
+
+export const auth = betterAuth({
+  database: typeormAdapter(dataSource, {
+    enableSchemaSync: true,
+  }),
+});
+```
+
+**Options:**
+
+- `enableSchemaSync` (optional): When `true`, the adapter runs `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ADD COLUMN` at runtime to match the data being inserted. Requires the runtime DB user to have DDL privileges. Default: `false`.
+
+**Note:** Keep this off in production. Manage your schema with migrations instead.
+
 ## 🌟 Why use this adapter?
 
 - **Seamless Integration**: Direct mapping between Better Auth entities and TypeORM
