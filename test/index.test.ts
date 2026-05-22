@@ -21,6 +21,7 @@ const { execute } = await testAdapter({
   adapter: () => {
     return typeormAdapter(dataSource, {
       debugLogs: false,
+      enableSchemaSync: true,
     });
   },
   runMigrations: async () => {

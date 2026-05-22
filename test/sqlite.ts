@@ -26,7 +26,7 @@ export const auth = betterAuth({
       enabled: true,
     },
   },
-  plugins: [organization(), twoFactor()],
+  plugins: [organization({ requireEmailVerificationOnInvitation: false }), twoFactor()],
 });
 
 export { dataSource };
