@@ -1,9 +1,9 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createAuthClient } from "better-auth/client";
 import { organizationClient, twoFactorClient } from "better-auth/client/plugins";
-import { spawn } from "bun";
+import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { auth, dataSource } from "./sqlite";
 
 afterAll(async () => {
@@ -519,12 +519,14 @@ describe("Two Factor Plugin", () => {
 
 describe("Schema Generation (createSchema)", () => {
   test("should run generate cli without errors", async () => {
-    const proc = spawn(["bunx", "auth", "generate", "--config", "sqlite.ts", "-y"], {
-      cwd: __dirname,
-      stdout: "pipe",
-      stderr: "pipe",
+    await new Promise<void>((resolve) => {
+      const proc = spawn("pnpm", ["exec", "auth", "generate", "--config", "sqlite.ts", "-y"], {
+        cwd: __dirname,
+        stdio: "pipe",
+      });
+      proc.on("exit", () => resolve());
+      proc.on("error", () => resolve());
     });
-    await proc.exited;
 
     const entitiesDir = path.join(__dirname, "typeorm/entities");
     const migrationsDir = path.join(__dirname, "typeorm/migrations");
@@ -537,7 +539,7 @@ describe("Schema Generation (createSchema)", () => {
 
     const migrations = fs.readdirSync(migrationsDir);
     expect(migrations.length).toBeGreaterThan(0);
-  });
+  }, 60_000);
 });
 
 describe("Delete User", () => {

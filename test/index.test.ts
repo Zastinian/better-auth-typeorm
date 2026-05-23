@@ -10,7 +10,7 @@ import { DataSource } from "typeorm";
 import { typeormAdapter } from "../package/src";
 
 const dataSource = new DataSource({
-  type: "sqlite",
+  type: "better-sqlite3",
   database: ":memory:",
   entities: [path.join(__dirname, "typeorm/entities/**/*.ts")],
   synchronize: true,
