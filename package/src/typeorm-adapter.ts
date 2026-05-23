@@ -174,7 +174,6 @@ function getDateColumnType(dataSource: DataSource): string {
     case "mysql":
     case "mariadb":
     case "better-sqlite3":
-    case "sqlite":
     case "sqljs":
     case "capacitor":
     case "cordova":
@@ -912,8 +911,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         const values = entries.map(([, value]) => normalizeQueryValue(value));
 
         try {
-          const isSqlite =
-            dataSource.options.type === "sqlite" || dataSource.options.type === "better-sqlite3";
+          const isSqlite = dataSource.options.type === "better-sqlite3";
           if (isSqlite) {
             await queryRunner.query("PRAGMA foreign_keys = OFF");
           }
