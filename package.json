@@ -1,15 +1,13 @@
 {
+  "private": true,
+  "packageManager": "pnpm@11.1.3",
   "devDependencies": {
     "@types/node": "24.1.0",
-    "@biomejs/biome": "2.4.10",
-    "@types/bun": "^1.3.13"
+    "@biomejs/biome": "2.4.10"
   },
   "scripts": {
-    "build": "bun run --filter '*' build",
-    "dev": "bun run --filter '*' dev"
-  },
-  "workspaces": [
-    "package",
-    "test"
-  ]
+    "build": "pnpm -r --filter \"./package\" run build",
+    "dev": "pnpm -r --filter \"./package\" run dev",
+    "test": "pnpm --filter test run test"
+  }
 }

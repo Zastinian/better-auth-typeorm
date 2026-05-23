@@ -1,0 +1,10 @@
+packages:
+  - "package"
+  - "test"
+
+allowBuilds:
+  better-sqlite3: false
+
+onlyBuiltDependencies:
+  - better-sqlite3
+  - "@biomejs/biome"
