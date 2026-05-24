@@ -20,7 +20,7 @@
   },
   "peerDependencies": {
     "better-auth": "^1.4.19",
-    "typeorm": "^0.3.21"
+    "typeorm": "^1.0.0"
   },
   "exports": {
     ".": {
