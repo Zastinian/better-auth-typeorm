@@ -1,5 +1,6 @@
+node_modules/
 src/
-tsconfig.json
-tsup.config.ts
 .npmignore
+tsconfig.json
+tsdown.config.ts
 !dist/*
