@@ -1,6 +1,5 @@
 import { createAuthClient } from "better-auth/client";
 import { organizationClient, twoFactorClient } from "better-auth/client/plugins";
-import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -515,14 +514,19 @@ describe("Two Factor Plugin", () => {
 
 describe("Schema Generation (createSchema)", () => {
   test("should run generate cli without errors", async () => {
-    await new Promise<void>((resolve) => {
-      const proc = spawn("pnpm", ["exec", "auth", "generate", "--config", "sqlite.ts", "-y"], {
-        cwd: __dirname,
-        stdio: "pipe",
-      });
-      proc.on("exit", () => resolve());
-      proc.on("error", () => resolve());
+    const { spawnSync } = await import("child_process");
+    const result = spawnSync("pnpm", ["exec", "auth", "generate", "--config", "sqlite.ts", "-y"], {
+      cwd: __dirname,
+      shell: true,
+      encoding: "utf-8",
     });
+
+    if (result.status !== 0) {
+      console.error("STDOUT:", result.stdout);
+      console.error("STDERR:", result.stderr);
+    }
+
+    expect(result.status).toBe(0);
 
     const entitiesDir = path.join(__dirname, "typeorm/entities");
     const migrationsDir = path.join(__dirname, "typeorm/migrations");
