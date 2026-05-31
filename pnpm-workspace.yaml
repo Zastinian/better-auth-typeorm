@@ -3,7 +3,8 @@ packages:
   - "test"
 
 allowBuilds:
-  better-sqlite3: false
+  esbuild: true
+  better-sqlite3: true
 
 onlyBuiltDependencies:
   - better-sqlite3
