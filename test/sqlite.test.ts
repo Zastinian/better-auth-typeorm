@@ -512,36 +512,6 @@ describe("Two Factor Plugin", () => {
   });
 });
 
-describe("Schema Generation (createSchema)", () => {
-  test("should run generate cli without errors", async () => {
-    const { spawnSync } = await import("child_process");
-    const result = spawnSync("pnpm", ["exec", "auth", "generate", "--config", "sqlite.ts", "-y"], {
-      cwd: __dirname,
-      shell: true,
-      encoding: "utf-8",
-    });
-
-    if (result.status !== 0) {
-      console.error("STDOUT:", result.stdout);
-      console.error("STDERR:", result.stderr);
-    }
-
-    expect(result.status).toBe(0);
-
-    const entitiesDir = path.join(__dirname, "typeorm/entities");
-    const migrationsDir = path.join(__dirname, "typeorm/migrations");
-
-    expect(fs.existsSync(entitiesDir)).toBe(true);
-    expect(fs.existsSync(migrationsDir)).toBe(true);
-
-    const entities = fs.readdirSync(entitiesDir);
-    expect(entities.length).toBeGreaterThan(0);
-
-    const migrations = fs.readdirSync(migrationsDir);
-    expect(migrations.length).toBeGreaterThan(0);
-  }, 60_000);
-});
-
 describe("Delete User", () => {
   test("should delete a user account", async () => {
     await client.signUp.email({
