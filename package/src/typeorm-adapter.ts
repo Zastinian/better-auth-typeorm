@@ -754,14 +754,15 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
             mappedFieldName = fieldMapCache[model][w.field];
           }
           const col = escapeId(dataSource, mappedFieldName);
+          const isInsensitive = w.mode === "insensitive";
+          const colSql = isInsensitive ? `LOWER(${col})` : col;
 
           const push = (value: unknown) => {
-            return pushParameter(
-              dataSource,
-              params,
-              normalizeQueryValue(value, dataSource),
-              startIndex,
-            );
+            let normalized = normalizeQueryValue(value, dataSource);
+            if (isInsensitive && typeof normalized === "string") {
+              normalized = normalized.toLowerCase();
+            }
+            return pushParameter(dataSource, params, normalized, startIndex);
           };
 
           switch (w.operator ?? "eq") {
@@ -769,36 +770,36 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               if (w.value === null) {
                 parts.push(`${prefix}${col} IS NULL`);
               } else {
-                parts.push(`${prefix}${col} = ${push(w.value)}`);
+                parts.push(`${prefix}${colSql} = ${push(w.value)}`);
               }
               break;
             case "ne":
               if (w.value === null) {
                 parts.push(`${prefix}${col} IS NOT NULL`);
               } else {
-                parts.push(`${prefix}${col} <> ${push(w.value)}`);
+                parts.push(`${prefix}${colSql} <> ${push(w.value)}`);
               }
               break;
             case "lt":
-              parts.push(`${prefix}${col} < ${push(w.value)}`);
+              parts.push(`${prefix}${colSql} < ${push(w.value)}`);
               break;
             case "lte":
-              parts.push(`${prefix}${col} <= ${push(w.value)}`);
+              parts.push(`${prefix}${colSql} <= ${push(w.value)}`);
               break;
             case "gt":
-              parts.push(`${prefix}${col} > ${push(w.value)}`);
+              parts.push(`${prefix}${colSql} > ${push(w.value)}`);
               break;
             case "gte":
-              parts.push(`${prefix}${col} >= ${push(w.value)}`);
+              parts.push(`${prefix}${colSql} >= ${push(w.value)}`);
               break;
             case "contains":
-              parts.push(`${prefix}${col} LIKE ${push(`%${String(w.value)}%`)}`);
+              parts.push(`${prefix}${colSql} LIKE ${push(`%${String(w.value)}%`)}`);
               break;
             case "starts_with":
-              parts.push(`${prefix}${col} LIKE ${push(`${String(w.value)}%`)}`);
+              parts.push(`${prefix}${colSql} LIKE ${push(`${String(w.value)}%`)}`);
               break;
             case "ends_with":
-              parts.push(`${prefix}${col} LIKE ${push(`%${String(w.value)}`)}`);
+              parts.push(`${prefix}${colSql} LIKE ${push(`%${String(w.value)}`)}`);
               break;
             case "in": {
               const values = Array.isArray(w.value) ? w.value : [];
@@ -806,7 +807,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
                 parts.push(`${prefix}1 = 0`);
               } else {
                 const placeholders = values.map((v) => push(v)).join(", ");
-                parts.push(`${prefix}${col} IN (${placeholders})`);
+                parts.push(`${prefix}${colSql} IN (${placeholders})`);
               }
               break;
             }
@@ -816,12 +817,12 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
                 parts.push(`${prefix}1 = 1`);
               } else {
                 const placeholders = values.map((v) => push(v)).join(", ");
-                parts.push(`${prefix}${col} NOT IN (${placeholders})`);
+                parts.push(`${prefix}${colSql} NOT IN (${placeholders})`);
               }
               break;
             }
             default:
-              parts.push(`${prefix}${col} = ${push(w.value)}`);
+              parts.push(`${prefix}${colSql} = ${push(w.value)}`);
               break;
           }
         }
