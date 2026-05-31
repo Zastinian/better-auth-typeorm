@@ -67,8 +67,11 @@ function pushParameter(
   return createParameterToken(dataSource, startIndex + params.length - 1);
 }
 
-function normalizeQueryValue(value: unknown): unknown {
+function normalizeQueryValue(value: unknown, dataSource: DataSource): unknown {
   if (value instanceof Date) {
+    if (dataSource.options.type === "mysql" || dataSource.options.type === "mariadb") {
+      return value;
+    }
     return value.toISOString();
   }
   if (typeof value === "object" && value !== null) {
@@ -587,8 +590,8 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
       usePlural: options?.usePlural ?? false,
       debugLogs: options?.debugLogs ?? false,
       supportsJSON: true,
-      supportsDates: false,
-      supportsBooleans: false,
+      supportsDates: true,
+      supportsBooleans: true,
       supportsNumericIds: false,
     },
     adapter: ({
@@ -613,6 +616,16 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         return fieldType === "json" || fieldType === "string[]" || fieldType === "number[]";
       }
 
+      function isDateTypedField(defaultModelName: string, fieldKey: string): boolean {
+        const fieldType = schema?.[defaultModelName]?.fields?.[fieldKey]?.type;
+        return fieldType === "date";
+      }
+
+      function isBooleanTypedField(defaultModelName: string, fieldKey: string): boolean {
+        const fieldType = schema?.[defaultModelName]?.fields?.[fieldKey]?.type;
+        return fieldType === "boolean";
+      }
+
       function deserializeRow(
         defaultModelName: string,
         row: Record<string, unknown>,
@@ -626,6 +639,15 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               denormalized[originalKey] = JSON.parse(value);
               continue;
             } catch {}
+          }
+          if (value !== null && isDateTypedField(defaultModelName, originalKey)) {
+            denormalized[originalKey] = new Date(value as string | number);
+            continue;
+          }
+          if (value !== null && isBooleanTypedField(defaultModelName, originalKey)) {
+            denormalized[originalKey] =
+              value === 1 || value === "1" || value === "true" || value === true;
+            continue;
           }
           denormalized[originalKey] = value;
         }
@@ -734,7 +756,12 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           const col = escapeId(dataSource, mappedFieldName);
 
           const push = (value: unknown) => {
-            return pushParameter(dataSource, params, normalizeQueryValue(value), startIndex);
+            return pushParameter(
+              dataSource,
+              params,
+              normalizeQueryValue(value, dataSource),
+              startIndex,
+            );
           };
 
           switch (w.operator ?? "eq") {
@@ -908,7 +935,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         const placeholders = entries
           .map((_, index) => createParameterToken(dataSource, index))
           .join(", ");
-        const values = entries.map(([, value]) => normalizeQueryValue(value));
+        const values = entries.map(([, value]) => normalizeQueryValue(value, dataSource));
 
         try {
           const isSqlite = dataSource.options.type === "better-sqlite3";
@@ -1038,7 +1065,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               setClauses.push(
                 `${escapeId(dataSource, key)} = ${createParameterToken(dataSource, setValues.length)}`,
               );
-              setValues.push(normalizeQueryValue(value));
+              setValues.push(normalizeQueryValue(value, dataSource));
             }
           }
 
@@ -1111,7 +1138,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
             setClauses.push(
               `${escapeId(dataSource, key)} = ${createParameterToken(dataSource, setValues.length)}`,
             );
-            setValues.push(normalizeQueryValue(value));
+            setValues.push(normalizeQueryValue(value, dataSource));
           }
         }
 
