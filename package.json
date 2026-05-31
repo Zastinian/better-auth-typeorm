@@ -8,6 +8,7 @@
   "scripts": {
     "build": "pnpm -r --filter \"./package\" run build",
     "dev": "pnpm -r --filter \"./package\" run dev",
-    "test": "pnpm --filter test run test"
+    "test": "pnpm --filter test run test",
+    "lint": "biome check ."
   }
 }
