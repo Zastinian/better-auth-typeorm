@@ -1,5 +1,6 @@
 import {
   authFlowTestSuite,
+  caseInsensitiveTestSuite,
   normalTestSuite,
   testAdapter,
   transactionsTestSuite,
@@ -37,6 +38,7 @@ const { execute } = await testAdapter({
         "findMany - should select fields": true,
       },
     }),
+    caseInsensitiveTestSuite(),
     transactionsTestSuite({ disableTests: { ALL: true } }),
     authFlowTestSuite(),
     uuidTestSuite({
