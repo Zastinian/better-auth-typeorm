@@ -7,7 +7,9 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { auth, dataSource } from "./sqlite";
 
 afterAll(async () => {
-  await dataSource.destroy();
+  if (dataSource.isInitialized) {
+    await dataSource.destroy();
+  }
 });
 
 const typeormDir = path.join(__dirname, "typeorm");
@@ -23,12 +25,6 @@ beforeAll(async () => {
       name: "Setup User",
     },
   });
-});
-
-afterAll(async () => {
-  if (dataSource.isInitialized) {
-    await dataSource.destroy();
-  }
 });
 
 const client = createAuthClient({
