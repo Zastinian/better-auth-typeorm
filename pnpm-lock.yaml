@@ -57,6 +57,9 @@ importers:
       pg:
         specifier: ^8.16.3
         version: 8.23.0
+      reflect-metadata:
+        specifier: ^0.2.2
+        version: 0.2.2
       typeorm:
         specifier: ^1.0.0
         version: 1.0.0(better-sqlite3@12.10.0)(mysql2@3.23.3(@types/node@24.1.0))(pg@8.23.0)

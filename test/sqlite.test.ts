@@ -11,7 +11,7 @@ afterAll(async () => {
   }
 });
 
-const typeormDir = path.join(__dirname, "typeorm");
+const typeormDir = path.join(__dirname, "typeorm/sqlite");
 if (fs.existsSync(typeormDir)) {
   fs.rmSync(typeormDir, { recursive: true });
 }

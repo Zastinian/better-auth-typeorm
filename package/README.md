@@ -113,6 +113,21 @@ export const dataSource = new DataSource({
 });
 ```
 
+### Relation Column Types
+
+Reference-backed fields generate both a scalar column and a TypeORM relation. By default, the adapter derives the foreign-key type from the referenced field. For custom entities, such as a UUID primary key in an `ImageEntity`, use `columnTypeOverrides` when the referenced entity is not part of the generated Better Auth schema:
+
+```typescript
+database: typeormAdapter(dataSource, {
+  columnTypeOverrides: {
+    user: { image: "uuid" },
+    image: { id: "uuid" },
+  },
+});
+```
+
+The related entity must also be registered in the same TypeORM `DataSource` (through `entities`, `autoLoadEntities`, or the equivalent framework module configuration). The adapter cannot resolve relation metadata for an entity that TypeORM has not registered.
+
 ### Enable Soft Delete
 
 You can enable soft delete for entities by passing list of entities that should use soft delete by passing softDeleteEnabledEntities option to the adapter:

@@ -4,12 +4,14 @@ import path from "path";
 import { DataSource } from "typeorm";
 import { typeormAdapter } from "../package/src";
 
+const typeormOutputDir = path.join(__dirname, "typeorm/sqlite");
+
 const dataSource = new DataSource({
   type: "better-sqlite3",
   database: ":memory:",
   migrationsRun: true,
-  entities: [path.join(__dirname, "typeorm/entities/**/*.ts")],
-  migrations: [path.join(__dirname, "typeorm/migrations/**/*.ts")],
+  entities: [path.join(typeormOutputDir, "entities/**/*.ts")],
+  migrations: [path.join(typeormOutputDir, "migrations/**/*.ts")],
 });
 
 await dataSource.initialize();
@@ -17,7 +19,9 @@ await dataSource.initialize();
 export const auth = betterAuth({
   baseURL: "http://localhost:3000",
   secret: "test-secret-better-auth-typeorm-1234",
-  database: typeormAdapter(dataSource),
+  database: typeormAdapter(dataSource, {
+    outputDir: typeormOutputDir,
+  }),
   emailAndPassword: {
     enabled: true,
   },

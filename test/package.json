@@ -2,13 +2,13 @@
   "name": "test",
   "private": true,
   "scripts": {
-    "test": "pnpm run test:sqlite && pnpm run test:databases",
+    "test": "concurrently --kill-others-on-fail --names sqlite,postgres,typeorm --prefix name \"pnpm run test:sqlite\" \"pnpm run test:postgres\" \"pnpm run test:typeorm\"",
     "test:sqlite": "pnpm run generate:sqlite && cross-env NODE_OPTIONS=\"--import tsx\" vitest run index.test.ts && cross-env NODE_OPTIONS=\"--import tsx\" vitest run sqlite.test.ts",
-    "test:databases": "concurrently --names postgres,mysql --prefix name \"pnpm run test:postgres\" \"pnpm run test:mysql\"",
     "test:postgres": "pnpm run generate:postgres && cross-env NODE_OPTIONS=\"--import tsx\" vitest run postgres.test.ts",
+    "test:typeorm": "cross-env NODE_OPTIONS=\"--import tsx\" vitest run typeorm-relations.test.ts",
     "test:mysql": "pnpm run generate:mysql && cross-env NODE_OPTIONS=\"--import tsx\" vitest run mysql.test.ts",
     "generate": "pnpm run generate:sqlite",
-    "generate:sqlite": "rimraf typeorm && pnpm exec auth generate --config sqlite.ts -y",
+    "generate:sqlite": "rimraf typeorm/sqlite && pnpm exec auth generate --config sqlite.ts -y",
     "generate:postgres": "rimraf typeorm/postgres && pnpm exec auth generate --config postgres.ts -y",
     "generate:mysql": "rimraf typeorm/mysql && pnpm exec auth generate --config mysql.ts -y"
   },
@@ -30,6 +30,7 @@
     "better-sqlite3": "^12.10.0",
     "mysql2": "^3.15.3",
     "pg": "^8.16.3",
+    "reflect-metadata": "^0.2.2",
     "typeorm": "^1.0.0",
     "vitest": "^4.1.7"
   },
