@@ -4,6 +4,8 @@ import path from "path";
 import { DataSource } from "typeorm";
 import { typeormAdapter } from "../package/src";
 
+const typeormOutputDir = path.join(__dirname, "typeorm/postgres");
+
 const dataSource = new DataSource({
   type: "postgres",
   host: process.env.POSTGRES_HOST ?? "127.0.0.1",
@@ -12,12 +14,14 @@ const dataSource = new DataSource({
   password: process.env.POSTGRES_PASSWORD ?? "postgres",
   database: process.env.POSTGRES_DATABASE ?? "better_auth_test",
   migrationsRun: true,
-  entities: [path.join(__dirname, "typeorm/entities/**/*.ts")],
-  migrations: [path.join(__dirname, "typeorm/migrations/**/*.ts")],
+  entities: [path.join(typeormOutputDir, "entities/**/*.ts")],
+  migrations: [path.join(typeormOutputDir, "migrations/**/*.ts")],
 });
 
 export const auth = betterAuth({
-  database: typeormAdapter(dataSource),
+  database: typeormAdapter(dataSource, {
+    outputDir: typeormOutputDir,
+  }),
   emailAndPassword: {
     enabled: true,
   },

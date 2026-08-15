@@ -10,6 +10,8 @@ import path from "path";
 import { DataSource } from "typeorm";
 import { typeormAdapter } from "../package/src";
 
+const typeormOutputDir = path.join(__dirname, "typeorm/postgres");
+
 const dataSource = new DataSource({
   type: "postgres",
   host: process.env.POSTGRES_HOST ?? "127.0.0.1",
@@ -17,7 +19,7 @@ const dataSource = new DataSource({
   username: process.env.POSTGRES_USER ?? "postgres",
   password: process.env.POSTGRES_PASSWORD ?? "postgres",
   database: process.env.POSTGRES_DATABASE ?? "better_auth_test",
-  entities: [path.join(__dirname, "typeorm/entities/**/*.ts")],
+  entities: [path.join(typeormOutputDir, "entities/**/*.ts")],
   synchronize: true,
   logging: false,
 });
@@ -25,6 +27,7 @@ const dataSource = new DataSource({
 const { execute } = await testAdapter({
   adapter: () =>
     typeormAdapter(dataSource, {
+      outputDir: typeormOutputDir,
       debugLogs: false,
       enableSchemaSync: true,
     }),

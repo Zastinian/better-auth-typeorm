@@ -2,19 +2,21 @@
   "name": "test",
   "private": true,
   "scripts": {
-    "test": "pnpm run test:sqlite && pnpm run test:postgres && pnpm run test:mysql",
+    "test": "pnpm run test:sqlite && pnpm run test:databases",
     "test:sqlite": "pnpm run generate:sqlite && cross-env NODE_OPTIONS=\"--import tsx\" vitest run index.test.ts && cross-env NODE_OPTIONS=\"--import tsx\" vitest run sqlite.test.ts",
+    "test:databases": "concurrently --names postgres,mysql --prefix name \"pnpm run test:postgres\" \"pnpm run test:mysql\"",
     "test:postgres": "pnpm run generate:postgres && cross-env NODE_OPTIONS=\"--import tsx\" vitest run postgres.test.ts",
     "test:mysql": "pnpm run generate:mysql && cross-env NODE_OPTIONS=\"--import tsx\" vitest run mysql.test.ts",
     "generate": "pnpm run generate:sqlite",
     "generate:sqlite": "rimraf typeorm && pnpm exec auth generate --config sqlite.ts -y",
-    "generate:postgres": "rimraf typeorm && pnpm exec auth generate --config postgres.ts -y",
-    "generate:mysql": "rimraf typeorm && pnpm exec auth generate --config mysql.ts -y"
+    "generate:postgres": "rimraf typeorm/postgres && pnpm exec auth generate --config postgres.ts -y",
+    "generate:mysql": "rimraf typeorm/mysql && pnpm exec auth generate --config mysql.ts -y"
   },
   "devDependencies": {
     "@types/bun": "^1.3.13",
     "@types/node": "^24.1.0",
     "auth": "^1.6.11",
+    "concurrently": "^10.0.4",
     "cross-env": "^7.0.3",
     "rimraf": "^6.0.1",
     "tsx": "^4.20.0"

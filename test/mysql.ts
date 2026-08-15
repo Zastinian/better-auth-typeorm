@@ -4,6 +4,8 @@ import path from "path";
 import { DataSource } from "typeorm";
 import { typeormAdapter } from "../package/src";
 
+const typeormOutputDir = path.join(__dirname, "typeorm/mysql");
+
 const dataSource = new DataSource({
   type: "mysql",
   host: process.env.MYSQL_HOST ?? "127.0.0.1",
@@ -12,12 +14,14 @@ const dataSource = new DataSource({
   password: process.env.MYSQL_PASSWORD ?? "root",
   database: process.env.MYSQL_DATABASE ?? "better_auth_test",
   migrationsRun: true,
-  entities: [path.join(__dirname, "typeorm/entities/**/*.ts")],
-  migrations: [path.join(__dirname, "typeorm/migrations/**/*.ts")],
+  entities: [path.join(typeormOutputDir, "entities/**/*.ts")],
+  migrations: [path.join(typeormOutputDir, "migrations/**/*.ts")],
 });
 
 export const auth = betterAuth({
-  database: typeormAdapter(dataSource),
+  database: typeormAdapter(dataSource, {
+    outputDir: typeormOutputDir,
+  }),
   emailAndPassword: {
     enabled: true,
   },

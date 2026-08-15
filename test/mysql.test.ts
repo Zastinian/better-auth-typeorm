@@ -10,6 +10,8 @@ import path from "path";
 import { DataSource } from "typeorm";
 import { typeormAdapter } from "../package/src";
 
+const typeormOutputDir = path.join(__dirname, "typeorm/mysql");
+
 const dataSource = new DataSource({
   type: "mysql",
   host: process.env.MYSQL_HOST ?? "127.0.0.1",
@@ -17,7 +19,7 @@ const dataSource = new DataSource({
   username: process.env.MYSQL_USER ?? "root",
   password: process.env.MYSQL_PASSWORD ?? "root",
   database: process.env.MYSQL_DATABASE ?? "better_auth_test",
-  entities: [path.join(__dirname, "typeorm/entities/**/*.ts")],
+  entities: [path.join(typeormOutputDir, "entities/**/*.ts")],
   synchronize: true,
   logging: false,
 });
@@ -25,6 +27,7 @@ const dataSource = new DataSource({
 const { execute } = await testAdapter({
   adapter: () =>
     typeormAdapter(dataSource, {
+      outputDir: typeormOutputDir,
       debugLogs: false,
       enableSchemaSync: true,
     }),
