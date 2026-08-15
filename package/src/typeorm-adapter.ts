@@ -86,20 +86,38 @@ async function ensureTableExists(
   dataSource: DataSource,
   tableName: string,
   data: Record<string, unknown>,
+  queryRunner: QueryRunner,
 ): Promise<void> {
-  const queryRunner = dataSource.createQueryRunner();
-  await queryRunner.connect();
-  try {
-    const tableExists = await queryRunner.hasTable(tableName);
-    if (!tableExists) {
-      const columns = Object.entries(data)
-        .map(([key, value]) => {
-          const escaped = escapeId(dataSource, key);
-          if (key === "id") {
-            const primaryColumnType = getPrimaryColumnType(dataSource);
-            const length = primaryColumnType.length ? `(${primaryColumnType.length})` : "";
-            return `${escaped} ${primaryColumnType.type}${length} PRIMARY KEY`;
-          }
+  const tableExists = await queryRunner.hasTable(tableName);
+  if (!tableExists) {
+    const columns = Object.entries(data)
+      .map(([key, value]) => {
+        const escaped = escapeId(dataSource, key);
+        if (key === "id") {
+          const primaryColumnType = getPrimaryColumnType(dataSource);
+          const length = primaryColumnType.length ? `(${primaryColumnType.length})` : "";
+          return `${escaped} ${primaryColumnType.type}${length} PRIMARY KEY`;
+        }
+        const type =
+          typeof value === "boolean"
+            ? "boolean"
+            : typeof value === "number"
+              ? "integer"
+              : value instanceof Date
+                ? getDateColumnType(dataSource)
+                : "text";
+        return `${escaped} ${type}`;
+      })
+      .join(", ");
+    await queryRunner.query(
+      `CREATE TABLE IF NOT EXISTS ${escapeId(dataSource, tableName)} (${columns})`,
+    );
+  } else {
+    const table = await queryRunner.getTable(tableName);
+    if (table) {
+      const existingColumns = new Set(table.columns.map((col) => col.name));
+      for (const [key, value] of Object.entries(data)) {
+        if (!existingColumns.has(key)) {
           const type =
             typeof value === "boolean"
               ? "boolean"
@@ -108,35 +126,12 @@ async function ensureTableExists(
                 : value instanceof Date
                   ? getDateColumnType(dataSource)
                   : "text";
-          return `${escaped} ${type}`;
-        })
-        .join(", ");
-      await queryRunner.query(
-        `CREATE TABLE IF NOT EXISTS ${escapeId(dataSource, tableName)} (${columns})`,
-      );
-    } else {
-      const table = await queryRunner.getTable(tableName);
-      if (table) {
-        const existingColumns = new Set(table.columns.map((col) => col.name));
-        for (const [key, value] of Object.entries(data)) {
-          if (!existingColumns.has(key)) {
-            const type =
-              typeof value === "boolean"
-                ? "boolean"
-                : typeof value === "number"
-                  ? "integer"
-                  : value instanceof Date
-                    ? getDateColumnType(dataSource)
-                    : "text";
-            await queryRunner.query(
-              `ALTER TABLE ${escapeId(dataSource, tableName)} ADD COLUMN ${escapeId(dataSource, key)} ${type}`,
-            );
-          }
+          await queryRunner.query(
+            `ALTER TABLE ${escapeId(dataSource, tableName)} ADD COLUMN ${escapeId(dataSource, key)} ${type}`,
+          );
         }
       }
     }
-  } finally {
-    await queryRunner.release();
   }
 }
 
@@ -1039,7 +1034,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
 
         let updatedExistingColumns: Set<string> | null = existingColumns;
         if (options?.enableSchemaSync) {
-          await ensureTableExists(dataSource, tableName, mappedData);
+          await ensureTableExists(dataSource, tableName, mappedData, queryRunner);
           await synchronizeForeignKeys(queryRunner, model, tableName);
           updatedExistingColumns = null;
           try {
