@@ -96,7 +96,9 @@ async function ensureTableExists(
         .map(([key, value]) => {
           const escaped = escapeId(dataSource, key);
           if (key === "id") {
-            return `${escaped} text PRIMARY KEY`;
+            const primaryColumnType = getPrimaryColumnType(dataSource);
+            const length = primaryColumnType.length ? `(${primaryColumnType.length})` : "";
+            return `${escaped} ${primaryColumnType.type}${length} PRIMARY KEY`;
           }
           const type =
             typeof value === "boolean"
@@ -190,15 +192,29 @@ function getDateColumnType(dataSource: DataSource): string {
   }
 }
 
+function getPrimaryColumnType(dataSource: DataSource): { type: string; length?: string } {
+  if (dataSource.options.type === "mysql" || dataSource.options.type === "mariadb") {
+    return { type: "varchar", length: "255" };
+  }
+  return { type: "text" };
+}
+
 function mapFieldTypeToTypeORM(
   fieldType: string | string[],
   field: FieldAttribute,
   dataSource: DataSource,
+  isKeyField = false,
 ): { type: string; length?: string } {
   const typeStr = Array.isArray(fieldType) ? fieldType[0] || "string" : fieldType;
 
   switch (typeStr) {
     case "string":
+      if (
+        isKeyField &&
+        (dataSource.options.type === "mysql" || dataSource.options.type === "mariadb")
+      ) {
+        return { type: "varchar", length: "255" };
+      }
       return { type: "text" };
     case "number":
       return { type: field.bigint ? "bigint" : "integer" };
@@ -315,18 +331,30 @@ function generateEntity(
   }
   imports.push("");
   let entityCode = `@Entity('${tableName}')\nexport class ${className} {\n`;
-
-  entityCode += "  @PrimaryColumn('text')\n";
+  const primaryColumnType = getPrimaryColumnType(dataSource);
+  const primaryColumnOptions = primaryColumnType.length
+    ? `, { length: '${primaryColumnType.length}' }`
+    : "";
+  entityCode += `  @PrimaryColumn('${primaryColumnType.type}'${primaryColumnOptions})\n`;
   entityCode += "  id!: string;\n\n";
 
   for (const [fieldName, field] of Object.entries(modelSchema.fields)) {
     const fieldAttr = field as FieldAttribute;
     const dbField = fieldAttr.fieldName || fieldName;
-    const typeInfo = mapFieldTypeToTypeORM(fieldAttr.type, fieldAttr, dataSource);
+    const typeInfo = mapFieldTypeToTypeORM(
+      fieldAttr.type,
+      fieldAttr,
+      dataSource,
+      fieldAttr.unique || fieldAttr.index || dbField === "email" || dbField === "token",
+    );
 
     const columnOptions: string[] = [];
 
     columnOptions.push(`name: '${dbField}'`);
+
+    if (typeInfo.length) {
+      columnOptions.push(`length: '${typeInfo.length}'`);
+    }
 
     if (!fieldAttr.required) {
       columnOptions.push("nullable: true");
@@ -408,16 +436,25 @@ function generateMigration(
     const columns: string[] = [];
     const postCreateStatements: string[] = [];
 
+    const primaryColumnType = getPrimaryColumnType(dataSource);
+    const primaryColumnLength = primaryColumnType.length
+      ? `            length: '${primaryColumnType.length}',\n`
+      : "";
     columns.push(`          {
             name: 'id',
-            type: 'text',
-            isPrimary: true,
+            type: '${primaryColumnType.type}',
+${primaryColumnLength}            isPrimary: true,
           }`);
 
     for (const [fieldName, field] of Object.entries(modelSchema.fields)) {
       const fieldAttr = field as FieldAttribute;
       const dbField = fieldAttr.fieldName || fieldName;
-      const typeInfo = mapFieldTypeToTypeORM(fieldAttr.type, fieldAttr, dataSource);
+      const typeInfo = mapFieldTypeToTypeORM(
+        fieldAttr.type,
+        fieldAttr,
+        dataSource,
+        fieldAttr.unique || fieldAttr.index || dbField === "email" || dbField === "token",
+      );
 
       if (fieldName === "id" || dbField === "id") {
         continue;
@@ -481,10 +518,19 @@ function generateMigration(
   } else if (action === "alter" && changes) {
     if (changes.addColumns && changes.addColumns.length > 0) {
       for (const { name, field } of changes.addColumns) {
-        const typeInfo = mapFieldTypeToTypeORM(field.type, field, dataSource);
+        const dbField = field.fieldName || name;
+        const typeInfo = mapFieldTypeToTypeORM(
+          field.type,
+          field,
+          dataSource,
+          field.unique || field.index || dbField === "email" || dbField === "token",
+        );
         migrationCode += `    await queryRunner.addColumn('${tableName}', new TableColumn({\n`;
         migrationCode += `      name: '${field.fieldName || name}',\n`;
         migrationCode += `      type: '${typeInfo.type}',\n`;
+        if (typeInfo.length) {
+          migrationCode += `      length: '${typeInfo.length}',\n`;
+        }
         migrationCode += `      isNullable: ${!field.required},\n`;
         if (
           field.unique ||
@@ -499,7 +545,6 @@ function generateMigration(
         }
         migrationCode += "    }));\n\n";
         if (field.index) {
-          const dbField = field.fieldName || name;
           migrationCode += `    await queryRunner.createIndex('${tableName}', new TableIndex({ name: '${tableName}_${dbField}_idx', columnNames: ['${dbField}'] }));\n\n`;
         }
         if (field.references) {
@@ -517,10 +562,19 @@ function generateMigration(
 
     if (changes.modifyColumns && changes.modifyColumns.length > 0) {
       for (const { name, field } of changes.modifyColumns) {
-        const typeInfo = mapFieldTypeToTypeORM(field.type, field, dataSource);
+        const dbField = field.fieldName || name;
+        const typeInfo = mapFieldTypeToTypeORM(
+          field.type,
+          field,
+          dataSource,
+          field.unique || field.index || dbField === "email" || dbField === "token",
+        );
         migrationCode += `    await queryRunner.changeColumn('${tableName}', '${name}', new TableColumn({\n`;
         migrationCode += `      name: '${field.fieldName || name}',\n`;
         migrationCode += `      type: '${typeInfo.type}',\n`;
+        if (typeInfo.length) {
+          migrationCode += `      length: '${typeInfo.length}',\n`;
+        }
         migrationCode += `      isNullable: ${!field.required},\n`;
         if (
           field.unique ||
