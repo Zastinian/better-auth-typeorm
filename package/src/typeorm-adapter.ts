@@ -16,7 +16,9 @@ import {
   Not,
   type ObjectLiteral,
   type QueryResult,
+  type QueryRunner,
   type Repository,
+  TableForeignKey,
   type UpdateResult,
 } from "typeorm";
 
@@ -665,6 +667,81 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         return reverseFieldMap;
       }
 
+      async function synchronizeForeignKeys(
+        queryRunner: QueryRunner,
+        model: string,
+        tableName: string,
+      ): Promise<void> {
+        if (!options?.enableSchemaSync) {
+          return;
+        }
+
+        const defaultModelName = getDefaultModelName(model);
+        const fields = schema?.[defaultModelName]?.fields as
+          | Record<string, FieldAttribute>
+          | undefined;
+        if (!fields) {
+          return;
+        }
+
+        let table = await queryRunner.getTable(tableName);
+        if (!table) {
+          return;
+        }
+
+        for (const [fieldName, field] of Object.entries(fields)) {
+          if (!field.references) {
+            continue;
+          }
+
+          const columnName = field.fieldName || fieldName;
+          const referencedTableName = getModelName(field.references.model);
+          const currentTable = table;
+          const staleForeignKeys = currentTable.foreignKeys.filter(
+            (foreignKey) =>
+              foreignKey.columnNames.length === 1 &&
+              foreignKey.columnNames[0] === columnName &&
+              (foreignKey.referencedTableName !== referencedTableName ||
+                foreignKey.referencedColumnNames[0] !== field.references?.field),
+          );
+
+          for (const foreignKey of staleForeignKeys) {
+            await queryRunner.dropForeignKey(tableName, foreignKey);
+          }
+
+          const refreshedTable = await queryRunner.getTable(tableName);
+          if (!refreshedTable || !(await queryRunner.hasTable(referencedTableName))) {
+            continue;
+          }
+          table = refreshedTable;
+
+          const hasForeignKey = refreshedTable.foreignKeys.some(
+            (foreignKey) =>
+              foreignKey.columnNames.length === 1 &&
+              foreignKey.columnNames[0] === columnName &&
+              foreignKey.referencedTableName === referencedTableName &&
+              foreignKey.referencedColumnNames[0] === field.references?.field,
+          );
+
+          if (!hasForeignKey) {
+            await queryRunner.createForeignKey(
+              tableName,
+              new TableForeignKey({
+                columnNames: [columnName],
+                referencedTableName,
+                referencedColumnNames: [field.references.field],
+                onDelete: (field.references.onDelete || "cascade").toUpperCase() as
+                  | "NO ACTION"
+                  | "RESTRICT"
+                  | "CASCADE"
+                  | "SET NULL"
+                  | "SET DEFAULT",
+              }),
+            );
+          }
+        }
+      }
+
       function convertWhereToFindOptions(
         model: string,
         action:
@@ -909,6 +986,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         let updatedExistingColumns: Set<string> | null = existingColumns;
         if (options?.enableSchemaSync) {
           await ensureTableExists(dataSource, tableName, mappedData);
+          await synchronizeForeignKeys(queryRunner, model, tableName);
           updatedExistingColumns = null;
           try {
             const table = await queryRunner.getTable(tableName);
