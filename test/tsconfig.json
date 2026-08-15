@@ -19,6 +19,7 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false,
     "strictPropertyInitialization": false,
-    "baseUrl": "."
+    "baseUrl": ".",
+    "types": ["node"]
   }
 }
