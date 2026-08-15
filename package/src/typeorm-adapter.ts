@@ -142,6 +142,7 @@ type FieldAttribute = {
   index?: boolean;
   bigint?: boolean;
   fieldName?: string;
+  columnType?: string;
   defaultValue?: unknown | (() => unknown);
   onUpdate?: () => unknown;
   references?: {
@@ -149,6 +150,20 @@ type FieldAttribute = {
     field: string;
     onDelete?: "no action" | "restrict" | "cascade" | "set null" | "set default";
   };
+};
+
+type ModelSchema = {
+  modelName: string;
+  fields: Record<string, FieldAttribute>;
+  disableMigrations?: boolean;
+  order?: number;
+};
+
+type TypeMappingContext = {
+  modelName: string;
+  fieldName: string;
+  schemas?: Record<string, ModelSchema>;
+  options?: TypeormAdapterOptions;
 };
 
 function toPascalCase(value: string): string {
@@ -194,15 +209,123 @@ function getPrimaryColumnType(dataSource: DataSource): { type: string; length?: 
   return { type: "text" };
 }
 
+function findReferencedModel(
+  referencedModel: string,
+  schemas?: Record<string, ModelSchema>,
+): ModelSchema | undefined {
+  if (!schemas) {
+    return undefined;
+  }
+  return (
+    schemas[referencedModel] ??
+    Object.values(schemas).find((modelSchema) => modelSchema.modelName === referencedModel)
+  );
+}
+
+function getReferenceTableName(
+  referencedModel: string,
+  schemas?: Record<string, ModelSchema>,
+): string {
+  return findReferencedModel(referencedModel, schemas)?.modelName ?? referencedModel;
+}
+
+function getReferenceColumnName(
+  referencedModel: string,
+  referencedField: string,
+  schemas?: Record<string, ModelSchema>,
+): string {
+  const referencedSchema = findReferencedModel(referencedModel, schemas);
+  return referencedSchema?.fields[referencedField]?.fieldName || referencedField;
+}
+
+function normalizeColumnTypeForDriver(
+  dataSource: DataSource,
+  columnType: string,
+): { type: string; length?: string } {
+  if (columnType === "uuid") {
+    if (dataSource.options.type === "mysql" || dataSource.options.type === "mariadb") {
+      return { type: "varchar", length: "36" };
+    }
+    if (dataSource.options.type === "better-sqlite3") {
+      return { type: "text" };
+    }
+  }
+  return { type: columnType };
+}
+
+function getColumnTypeOverride(
+  field: FieldAttribute,
+  context?: TypeMappingContext,
+): string | undefined {
+  return (
+    context?.options?.columnTypeOverrides?.[context.modelName]?.[context.fieldName] ??
+    field.columnType
+  );
+}
+
+function getPrimaryColumnTypeForModel(
+  dataSource: DataSource,
+  modelName: string,
+  schemas?: Record<string, ModelSchema>,
+  options?: TypeormAdapterOptions,
+): { type: string; length?: string } {
+  const override = options?.columnTypeOverrides?.[modelName]?.id;
+  if (override) {
+    return normalizeColumnTypeForDriver(dataSource, override);
+  }
+
+  const idField = findReferencedModel(modelName, schemas)?.fields.id;
+  if (idField) {
+    return mapFieldTypeToTypeORM(idField.type, idField, dataSource, true, {
+      modelName,
+      fieldName: "id",
+      schemas,
+      options,
+    });
+  }
+
+  return getPrimaryColumnType(dataSource);
+}
+
 function mapFieldTypeToTypeORM(
   fieldType: string | string[],
   field: FieldAttribute,
   dataSource: DataSource,
   isKeyField = false,
+  context?: TypeMappingContext,
 ): { type: string; length?: string } {
+  const override = getColumnTypeOverride(field, context);
+  if (override) {
+    return normalizeColumnTypeForDriver(dataSource, override);
+  }
+
+  if (field.references && context?.schemas) {
+    const referencedSchema = findReferencedModel(field.references.model, context.schemas);
+    const referencedField = referencedSchema?.fields[field.references.field];
+    if (referencedField) {
+      return mapFieldTypeToTypeORM(referencedField.type, referencedField, dataSource, false, {
+        modelName: field.references.model,
+        fieldName: field.references.field,
+        schemas: context.schemas,
+        options: context.options,
+      });
+    }
+
+    if (field.references.field === "id") {
+      const referencedIdOverride =
+        context.options?.columnTypeOverrides?.[field.references.model]?.id;
+      if (referencedIdOverride) {
+        return normalizeColumnTypeForDriver(dataSource, referencedIdOverride);
+      }
+      return getPrimaryColumnType(dataSource);
+    }
+  }
+
   const typeStr = Array.isArray(fieldType) ? fieldType[0] || "string" : fieldType;
 
   switch (typeStr) {
+    case "uuid":
+      return normalizeColumnTypeForDriver(dataSource, "uuid");
     case "string":
       if (
         isKeyField &&
@@ -298,12 +421,9 @@ function convertOperatorToTypeORM(operator: Where["operator"], value: unknown) {
 function generateEntity(
   dataSource: DataSource,
   modelName: string,
-  modelSchema: {
-    modelName: string;
-    fields: Record<string, FieldAttribute>;
-    disableMigrations?: boolean;
-    order?: number;
-  },
+  modelSchema: ModelSchema,
+  schemas?: Record<string, ModelSchema>,
+  options?: TypeormAdapterOptions,
 ): string {
   const className = toPascalCase(modelName);
   const tableName = modelSchema.modelName;
@@ -326,7 +446,7 @@ function generateEntity(
   }
   imports.push("");
   let entityCode = `@Entity('${tableName}')\nexport class ${className} {\n`;
-  const primaryColumnType = getPrimaryColumnType(dataSource);
+  const primaryColumnType = getPrimaryColumnTypeForModel(dataSource, modelName, schemas, options);
   const primaryColumnOptions = primaryColumnType.length
     ? `, { length: '${primaryColumnType.length}' }`
     : "";
@@ -341,6 +461,7 @@ function generateEntity(
       fieldAttr,
       dataSource,
       fieldAttr.unique || fieldAttr.index || dbField === "email" || dbField === "token",
+      { modelName, fieldName, schemas, options },
     );
 
     const columnOptions: string[] = [];
@@ -400,12 +521,7 @@ function generateEntity(
 function generateMigration(
   dataSource: DataSource,
   modelName: string,
-  modelSchema: {
-    modelName: string;
-    fields: Record<string, FieldAttribute>;
-    disableMigrations?: boolean;
-    order?: number;
-  },
+  modelSchema: ModelSchema,
   timestamp: number,
   action: "create" | "alter",
   changes?: {
@@ -413,6 +529,8 @@ function generateMigration(
     dropColumns?: string[];
     modifyColumns?: { name: string; field: FieldAttribute }[];
   },
+  schemas?: Record<string, ModelSchema>,
+  options?: TypeormAdapterOptions,
 ): string {
   const className = `${action.charAt(0).toUpperCase() + action.slice(1)}${toPascalCase(modelName)}${timestamp}`;
   const tableName = modelSchema.modelName;
@@ -431,7 +549,7 @@ function generateMigration(
     const columns: string[] = [];
     const postCreateStatements: string[] = [];
 
-    const primaryColumnType = getPrimaryColumnType(dataSource);
+    const primaryColumnType = getPrimaryColumnTypeForModel(dataSource, modelName, schemas, options);
     const primaryColumnLength = primaryColumnType.length
       ? `            length: '${primaryColumnType.length}',\n`
       : "";
@@ -449,6 +567,7 @@ ${primaryColumnLength}            isPrimary: true,
         fieldAttr,
         dataSource,
         fieldAttr.unique || fieldAttr.index || dbField === "email" || dbField === "token",
+        { modelName, fieldName, schemas, options },
       );
 
       if (fieldName === "id" || dbField === "id") {
@@ -494,8 +613,8 @@ ${primaryColumnLength}            isPrimary: true,
       '${tableName}',
       new TableForeignKey({
         columnNames: ['${dbField}'],
-        referencedTableName: '${fieldAttr.references.model}',
-        referencedColumnNames: ['${fieldAttr.references.field}'],
+        referencedTableName: '${getReferenceTableName(fieldAttr.references.model, schemas)}',
+        referencedColumnNames: ['${getReferenceColumnName(fieldAttr.references.model, fieldAttr.references.field, schemas)}'],
         onDelete: '${(fieldAttr.references.onDelete || "cascade").toUpperCase()}',
       }),
     );`);
@@ -519,6 +638,7 @@ ${primaryColumnLength}            isPrimary: true,
           field,
           dataSource,
           field.unique || field.index || dbField === "email" || dbField === "token",
+          { modelName, fieldName: name, schemas, options },
         );
         migrationCode += `    await queryRunner.addColumn('${tableName}', new TableColumn({\n`;
         migrationCode += `      name: '${field.fieldName || name}',\n`;
@@ -544,7 +664,7 @@ ${primaryColumnLength}            isPrimary: true,
         }
         if (field.references) {
           const dbField = field.fieldName || name;
-          migrationCode += `    await queryRunner.createForeignKey('${tableName}', new TableForeignKey({ columnNames: ['${dbField}'], referencedTableName: '${field.references.model}', referencedColumnNames: ['${field.references.field}'], onDelete: '${(field.references.onDelete || "cascade").toUpperCase()}' }));\n\n`;
+          migrationCode += `    await queryRunner.createForeignKey('${tableName}', new TableForeignKey({ columnNames: ['${dbField}'], referencedTableName: '${getReferenceTableName(field.references.model, schemas)}', referencedColumnNames: ['${getReferenceColumnName(field.references.model, field.references.field, schemas)}'], onDelete: '${(field.references.onDelete || "cascade").toUpperCase()}' }));\n\n`;
         }
       }
     }
@@ -563,6 +683,7 @@ ${primaryColumnLength}            isPrimary: true,
           field,
           dataSource,
           field.unique || field.index || dbField === "email" || dbField === "token",
+          { modelName, fieldName: name, schemas, options },
         );
         migrationCode += `    await queryRunner.changeColumn('${tableName}', '${name}', new TableColumn({\n`;
         migrationCode += `      name: '${field.fieldName || name}',\n`;
@@ -619,6 +740,7 @@ export interface TypeormAdapterOptions {
   debugLogs?: boolean;
   softDeleteEnabledEntities?: string[];
   enableSchemaSync?: boolean;
+  columnTypeOverrides?: Record<string, Record<string, string>>;
 }
 
 function createSchemaGenerationDataSource(dataSource: DataSource): DataSource {
@@ -732,6 +854,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         if (!fields) {
           return;
         }
+        const schemaModels = schema as unknown as Record<string, ModelSchema>;
 
         let table = await queryRunner.getTable(tableName);
         if (!table) {
@@ -745,13 +868,18 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
 
           const columnName = field.fieldName || fieldName;
           const referencedTableName = getModelName(field.references.model);
+          const referencedColumnName = getReferenceColumnName(
+            field.references.model,
+            field.references.field,
+            schemaModels,
+          );
           const currentTable = table;
           const staleForeignKeys = currentTable.foreignKeys.filter(
             (foreignKey) =>
               foreignKey.columnNames.length === 1 &&
               foreignKey.columnNames[0] === columnName &&
               (foreignKey.referencedTableName !== referencedTableName ||
-                foreignKey.referencedColumnNames[0] !== field.references?.field),
+                foreignKey.referencedColumnNames[0] !== referencedColumnName),
           );
 
           for (const foreignKey of staleForeignKeys) {
@@ -769,7 +897,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               foreignKey.columnNames.length === 1 &&
               foreignKey.columnNames[0] === columnName &&
               foreignKey.referencedTableName === referencedTableName &&
-              foreignKey.referencedColumnNames[0] === field.references?.field,
+              foreignKey.referencedColumnNames[0] === referencedColumnName,
           );
 
           if (!hasForeignKey) {
@@ -778,7 +906,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
               new TableForeignKey({
                 columnNames: [columnName],
                 referencedTableName,
-                referencedColumnNames: [field.references.field],
+                referencedColumnNames: [referencedColumnName],
                 onDelete: (field.references.onDelete || "cascade").toUpperCase() as
                   | "NO ACTION"
                   | "RESTRICT"
@@ -1545,7 +1673,13 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
 
               const tableExists = await queryRunner.hasTable(tableName);
 
-              const entityCode = generateEntity(dataSource, modelName, modelSchema);
+              const entityCode = generateEntity(
+                dataSource,
+                modelName,
+                modelSchema,
+                tables,
+                options,
+              );
               const entityPath = path.join(
                 entitiesDir,
                 `${modelName.charAt(0).toUpperCase() + modelName.slice(1)}.ts`,
@@ -1559,6 +1693,9 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
                   modelSchema,
                   timestamp,
                   "create",
+                  undefined,
+                  tables,
+                  options,
                 );
                 const migrationPath = path.join(migrationsDir, migrationFileName);
                 fs.writeFileSync(migrationPath, migrationCode);
@@ -1608,6 +1745,8 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
                     timestamp,
                     "alter",
                     changes,
+                    tables,
+                    options,
                   );
                   const migrationPath = path.join(migrationsDir, migrationFileName);
                   fs.writeFileSync(migrationPath, migrationCode);
