@@ -45,7 +45,7 @@ const { execute } = await testAdapter({
       },
     }),
     caseInsensitiveTestSuite(),
-    transactionsTestSuite({ disableTests: { ALL: true } }),
+    transactionsTestSuite(),
     authFlowTestSuite(),
     uuidTestSuite({
       disableTests: {
