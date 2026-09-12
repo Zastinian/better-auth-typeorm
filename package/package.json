@@ -15,7 +15,7 @@
     "typescript": "6.0.3"
   },
   "dependencies": {
-    "better-auth": "^1.6.11",
+    "better-auth": "^1.7.4",
     "typeorm": "^1.0.0"
   },
   "peerDependencies": {
