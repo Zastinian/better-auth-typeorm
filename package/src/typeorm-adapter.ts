@@ -1,8 +1,9 @@
 import { BetterAuthError } from "better-auth";
 import { type CleanedWhere, createAdapterFactory } from "better-auth/adapters";
-import type { Where } from "better-auth/types";
-import * as fs from "fs";
-import * as path from "path";
+import type { BetterAuthOptions, DBAdapter, DBTransactionAdapter, Where } from "better-auth/types";
+import { AsyncLocalStorage } from "node:async_hooks";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import {
   DataSource,
   type DeleteResult,
@@ -741,6 +742,7 @@ export interface TypeormAdapterOptions {
   softDeleteEnabledEntities?: string[];
   enableSchemaSync?: boolean;
   columnTypeOverrides?: Record<string, Record<string, string>>;
+  disableTransactions?: boolean;
 }
 
 function createSchemaGenerationDataSource(dataSource: DataSource): DataSource {
@@ -755,8 +757,46 @@ function createSchemaGenerationDataSource(dataSource: DataSource): DataSource {
   });
 }
 
-export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterOptions) =>
-  createAdapterFactory({
+const transactionQueryRunner = new AsyncLocalStorage<QueryRunner>();
+
+async function acquireRunner(dataSource: DataSource): Promise<{
+  queryRunner: QueryRunner;
+  release: () => Promise<void>;
+}> {
+  const transactionalQueryRunner = transactionQueryRunner.getStore();
+  if (transactionalQueryRunner) {
+    return { queryRunner: transactionalQueryRunner, release: async () => {} };
+  }
+  const queryRunner = dataSource.createQueryRunner();
+  await queryRunner.connect();
+  return { queryRunner, release: () => queryRunner.release() };
+}
+
+type TransactionCallback = <R>(callback: (trx: DBTransactionAdapter) => Promise<R>) => Promise<R>;
+
+export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterOptions) => {
+  let adapterRef: DBAdapter<BetterAuthOptions> | null = null;
+
+  const transaction: TransactionCallback | false =
+    options?.disableTransactions === true
+      ? false
+      : async (callback) => {
+          if (!dataSource.isInitialized) {
+            await dataSource.initialize();
+          }
+          return dataSource.transaction((manager) => {
+            const runner = manager.queryRunner;
+            const instance = adapterRef;
+            if (!runner || !instance) {
+              throw new BetterAuthError(
+                "TypeORM transaction could not be started: the data source or adapter instance is not ready.",
+              );
+            }
+            return transactionQueryRunner.run(runner, () => callback(instance));
+          });
+        };
+
+  const factory = createAdapterFactory({
     config: {
       adapterId: "typeorm",
       adapterName: "TypeORM",
@@ -766,6 +806,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
       supportsDates: true,
       supportsBooleans: true,
       supportsNumericIds: false,
+      transaction,
     },
     adapter: ({
       schema,
@@ -1092,8 +1133,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         const tableName = getModelName(model);
         const transformedData = await transformInput(data, defaultModelName, "create");
 
-        const queryRunner = dataSource.createQueryRunner();
-        await queryRunner.connect();
+        const { queryRunner, release } = await acquireRunner(dataSource);
 
         let existingColumns: Set<string> | null = null;
         try {
@@ -1222,7 +1262,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           }
           return await transformOutput(mappedData, defaultModelName, select);
         } finally {
-          await queryRunner.release();
+          await release();
         }
       }
 
@@ -1235,8 +1275,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         const tableName = getModelName(model);
         const { sql, params } = buildWhereSql(model, "findOne", where);
 
-        const queryRunner = dataSource.createQueryRunner();
-        await queryRunner.connect();
+        const { queryRunner, release } = await acquireRunner(dataSource);
         try {
           const rows = await queryRunner.query(
             `SELECT * FROM ${escapeId(dataSource, tableName)}${sql} LIMIT 1`,
@@ -1249,7 +1288,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           const denormalizedRow = deserializeRow(defaultModelName, rows[0], reverseFieldMap);
           return (await transformOutput(denormalizedRow, defaultModelName, select)) as T;
         } finally {
-          await queryRunner.release();
+          await release();
         }
       }
 
@@ -1278,8 +1317,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           query += ` OFFSET ${offset}`;
         }
 
-        const queryRunner = dataSource.createQueryRunner();
-        await queryRunner.connect();
+        const { queryRunner, release } = await acquireRunner(dataSource);
         try {
           const rows = await queryRunner.query(query, params);
           const reverseFieldMap = buildReverseFieldMap(model);
@@ -1291,7 +1329,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           );
           return transformed as T[];
         } finally {
-          await queryRunner.release();
+          await release();
         }
       }
 
@@ -1302,8 +1340,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
 
         const { sql: whereSql, params: whereParams } = buildWhereSql(model, "findOne", where);
 
-        const queryRunner = dataSource.createQueryRunner();
-        await queryRunner.connect();
+        const { queryRunner, release } = await acquireRunner(dataSource);
         try {
           const existing = await queryRunner.query(
             `SELECT * FROM ${escapeId(dataSource, tableName)}${whereSql} LIMIT 1`,
@@ -1344,7 +1381,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           }
           return null;
         } finally {
-          await queryRunner.release();
+          await release();
         }
       }
 
@@ -1352,12 +1389,11 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         const tableName = getModelName(model);
         const { sql, params } = buildWhereSql(model, "delete", where);
 
-        const queryRunner = dataSource.createQueryRunner();
-        await queryRunner.connect();
+        const { queryRunner, release } = await acquireRunner(dataSource);
         try {
           await queryRunner.query(`DELETE FROM ${escapeId(dataSource, tableName)}${sql}`, params);
         } finally {
-          await queryRunner.release();
+          await release();
         }
       }
 
@@ -1365,8 +1401,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         const tableName = getModelName(model);
         const { sql, params } = buildWhereSql(model, "count", where);
 
-        const queryRunner = dataSource.createQueryRunner();
-        await queryRunner.connect();
+        const { queryRunner, release } = await acquireRunner(dataSource);
         try {
           const result = await queryRunner.query(
             `SELECT COUNT(*) as cnt FROM ${escapeId(dataSource, tableName)}${sql}`,
@@ -1374,7 +1409,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           );
           return Number(result[0]?.cnt ?? 0);
         } finally {
-          await queryRunner.release();
+          await release();
         }
       }
 
@@ -1409,8 +1444,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           setValues.length,
         );
 
-        const queryRunner = dataSource.createQueryRunner();
-        await queryRunner.connect();
+        const { queryRunner, release } = await acquireRunner(dataSource);
         try {
           const result = await queryRunner.query(
             `UPDATE ${escapeId(dataSource, tableName)} SET ${setClauses.join(", ")}${whereSql}`,
@@ -1419,7 +1453,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           );
           return getAffectedRowCount(result);
         } finally {
-          await queryRunner.release();
+          await release();
         }
       }
 
@@ -1427,8 +1461,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
         const tableName = getModelName(model);
         const { sql, params } = buildWhereSql(model, "deleteMany", where);
 
-        const queryRunner = dataSource.createQueryRunner();
-        await queryRunner.connect();
+        const { queryRunner, release } = await acquireRunner(dataSource);
         try {
           const result = await queryRunner.query(
             `DELETE FROM ${escapeId(dataSource, tableName)}${sql}`,
@@ -1437,7 +1470,7 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
           );
           return getAffectedRowCount(result);
         } finally {
-          await queryRunner.release();
+          await release();
         }
       }
 
@@ -1805,3 +1838,10 @@ export const typeormAdapter = (dataSource: DataSource, options?: TypeormAdapterO
       };
     },
   });
+
+  return (authOptions: BetterAuthOptions) => {
+    const instance = factory(authOptions);
+    adapterRef = instance;
+    return instance;
+  };
+};
