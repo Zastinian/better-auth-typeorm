@@ -172,6 +172,22 @@ export const auth = betterAuth({
 
 **Note:** Keep this off in production. Manage your schema with migrations instead.
 
+### Native Transactions
+
+The adapter implements Better Auth's `transaction` capability on top of TypeORM. Every operation performed inside `db.transaction(...)` runs on the same TypeORM query runner, and the whole transaction is rolled back if the callback throws.
+
+```typescript
+import { typeormAdapter } from "@hedystia/better-auth-typeorm";
+
+export const auth = betterAuth({
+  database: typeormAdapter(dataSource),
+});
+```
+
+**Options:**
+
+- `disableTransactions` (optional): Set to `true` to opt out of native transactions and let Better Auth run operations sequentially. Use this only for drivers or database proxies that cannot run transactions. Default: `false`.
+
 ## 🌟 Why use this adapter?
 
 - **Seamless Integration**: Direct mapping between Better Auth entities and TypeORM
