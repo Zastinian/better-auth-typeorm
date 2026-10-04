@@ -10,16 +10,16 @@
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
   "devDependencies": {
-    "@types/bun": "1.3.14",
-    "tsdown": "0.22.0",
-    "typescript": "6.0.3"
+    "@types/bun": "1.4.2",
+    "tsdown": "0.23.0",
+    "typescript": "7.0.2"
   },
   "dependencies": {
-    "better-auth": "^1.7.4",
+    "better-auth": "^1.7.7",
     "typeorm": "^1.0.0"
   },
   "peerDependencies": {
-    "better-auth": "^1.4.19",
+    "better-auth": "^1.7.0",
     "typeorm": "^1.0.0"
   },
   "exports": {
