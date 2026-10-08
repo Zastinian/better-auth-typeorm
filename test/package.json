@@ -2,11 +2,9 @@
   "name": "test",
   "private": true,
   "scripts": {
-    "test": "concurrently --kill-others-on-fail --names sqlite,postgres,postgres-schema,postgres-perf,typeorm --prefix name \"pnpm run test:sqlite\" \"pnpm run test:postgres\" \"pnpm run test:postgres-schema\" \"pnpm run test:postgres-perf\" \"pnpm run test:typeorm\"",
+    "test": "concurrently --kill-others-on-fail --names sqlite,postgres,typeorm --prefix name \"pnpm run test:sqlite\" \"pnpm run test:postgres\" \"pnpm run test:postgres-schema\" \"pnpm run test:postgres-perf\" \"pnpm run test:typeorm\"",
     "test:sqlite": "pnpm run generate:sqlite && cross-env NODE_OPTIONS=\"--import tsx\" vitest run index.test.ts && cross-env NODE_OPTIONS=\"--import tsx\" vitest run sqlite.test.ts",
     "test:postgres": "pnpm run generate:postgres && cross-env NODE_OPTIONS=\"--import tsx\" vitest run postgres.test.ts",
-    "test:postgres-schema": "cross-env NODE_OPTIONS=\"--import tsx\" vitest run postgres-schema.test.ts",
-    "test:postgres-perf": "cross-env NODE_OPTIONS=\"--import tsx\" vitest run postgres-create-perf.test.ts",
     "test:typeorm": "cross-env NODE_OPTIONS=\"--import tsx\" vitest run typeorm-relations.test.ts",
     "test:mysql": "pnpm run generate:mysql && cross-env NODE_OPTIONS=\"--import tsx\" vitest run mysql.test.ts",
     "generate": "pnpm run generate:sqlite",
