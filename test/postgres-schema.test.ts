@@ -4,21 +4,6 @@ import { Column, DataSource, Entity, PrimaryColumn } from "typeorm";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { typeormAdapter } from "../package/src";
 
-/**
- * Regression test for https://github.com/Zastinian/better-auth-typeorm/issues/31
- *
- * The adapter built its raw SQL from the bare model name
- * (`SELECT * FROM "user"`) and never read the TypeORM entity metadata,
- * so entities declared with a non-default schema, e.g.
- * `@Entity({ name: "user", schema: "auth_admin" })`, were never found:
- * Postgres resolved the unqualified name through `search_path` (normally
- * `public`) and threw `relation "user" does not exist`.
- *
- * These tests run against the real Postgres service used in CI
- * (see `.github/workflows/ci.yml`) and fail while the adapter does not
- * qualify table names with the entity's schema.
- */
-
 const SCHEMA = "auth_admin";
 
 @Entity({ name: "user", schema: SCHEMA })
@@ -143,7 +128,7 @@ const dataSource = new DataSource({
   password: process.env.POSTGRES_PASSWORD ?? "postgres",
   database: process.env.POSTGRES_DATABASE ?? "better_auth_test",
   entities: [SchemaUser, SchemaSession, SchemaAccount, SchemaVerification],
-  synchronize: true,
+  synchronize: false,
   logging: false,
 });
 
@@ -177,9 +162,9 @@ beforeAll(async () => {
   if (!dataSource.isInitialized) {
     await dataSource.initialize();
   }
-  // The schema must exist before `synchronize` can create the tables in it.
+  await dataSource.query(`DROP SCHEMA IF EXISTS "${SCHEMA}" CASCADE`);
   await dataSource.query(`CREATE SCHEMA IF NOT EXISTS "${SCHEMA}"`);
-  await dataSource.synchronize(true);
+  await dataSource.synchronize(false);
 }, 60_000);
 
 afterAll(async () => {
@@ -198,9 +183,7 @@ describe("issue #31: raw SQL respects @Entity({ schema })", () => {
     }
   });
 
-  test("tables exist and TypeORM itself resolves them (control case from the issue)", async () => {
-    // From the issue: `ds.getRepository(User).count()` works because TypeORM
-    // builds `"auth_admin"."user"` from the entity metadata.
+  test("tables exist and TypeORM itself resolves them", async () => {
     await expect(dataSource.getRepository(SchemaUser).count()).resolves.toBe(0);
   });
 
@@ -215,18 +198,13 @@ describe("issue #31: raw SQL respects @Entity({ schema })", () => {
 
     expect(res.user.email).toBe("schema@test.com");
 
-    // Row must live in "auth_admin"."user", not in public."user".
     const rows = await dataSource.query(`SELECT * FROM "${SCHEMA}"."user" WHERE email = $1`, [
       "schema@test.com",
     ]);
     expect(rows).toHaveLength(1);
   });
 
-  test("signInEmail finds the user (exact repro from the issue)", async () => {
-    // Before the fix this threw:
-    // `BetterAuthError: Failed to find user: relation "user" does not exist`
-    // because the adapter issued `SELECT * FROM "user"` instead of
-    // `SELECT * FROM "auth_admin"."user"`.
+  test("signInEmail finds the user", async () => {
     const headers = await signInAndGetHeaders("schema@test.com", "password123");
     const session = await auth.api.getSession({ headers });
     expect(session).not.toBeNull();
